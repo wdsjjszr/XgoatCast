@@ -12,15 +12,15 @@ export interface ViewerState {
 }
 const INITIAL_STATE: ViewerState = { joined: false, hasVideo: false, hasAudio: false, audioBlocked: false, error: '' };
 
-export function useAgoraView(token: string, active: boolean, lowLatency: boolean) {
+export function useAgoraView(token: string, active: boolean, lowLatency: boolean, audioPreferences = { volume: 100, muted: false }) {
   const clientRef = useRef<IAgoraRTCClient | null>(null);
   const videoRef = useRef<IRemoteVideoTrack | null>(null);
   const audioRef = useRef<IRemoteAudioTrack | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const leavingRef = useRef<Promise<void>>(Promise.resolve());
   const identityRef = useRef<{ token: string; uid: number } | null>(null);
-  const volumeRef = useRef(100);
-  const mutedRef = useRef(false);
+  const volumeRef = useRef(audioPreferences.volume);
+  const mutedRef = useRef(audioPreferences.muted);
   const audioBlockedRef = useRef(false);
   const [state, setState] = useState<ViewerState>(INITIAL_STATE);
 

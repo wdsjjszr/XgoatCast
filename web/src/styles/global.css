@@ -264,3 +264,76 @@ details[open] > div { animation: home-dropdown-enter .18s cubic-bezier(.2,.8,.2,
   height: 100% !important;
   object-fit: contain !important;
 }
+
+/* 观看页的主题不改变管理页、共享页或视频本身。 */
+.view-page {
+  --view-bg: #e9ece7;
+  --view-surface: #fffefd;
+  --view-top: #f8f8f6;
+  --view-text: #20211f;
+  --view-muted: #5b5e59;
+  --view-border: #d9ddd6;
+  --view-hover: #e8ebe5;
+  --view-accent: #a94004;
+  --view-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+  background: var(--view-bg);
+  color: var(--view-text);
+  color-scheme: light;
+}
+.view-page[data-theme="dark"] {
+  --view-bg: #191c1d;
+  --view-surface: #242829;
+  --view-top: #202425;
+  --view-text: #f0f1ed;
+  --view-muted: #b9bfb9;
+  --view-border: #414746;
+  --view-hover: #343a39;
+  --view-accent: #ffa878;
+  --view-shadow: none;
+  color-scheme: dark;
+}
+.view-page .bg-surface-dark { background: var(--view-bg); }
+.view-page .glass, .view-page .glass-strong {
+  background: var(--view-surface);
+  border-color: var(--view-border);
+  box-shadow: var(--view-shadow);
+}
+.view-page .glass-strong { background: var(--view-top); }
+.view-page .text-muted, .view-page .text-dim,
+.view-page .notice-rich-text .notice-muted { color: var(--view-muted); }
+.view-page .text-white { color: var(--view-text); }
+.view-page .text-brand-light, .view-page .notice-rich-text a,
+.view-page .notice-rich-text .notice-highlight { color: var(--view-accent); }
+.view-page .hover\:text-white:hover { color: var(--view-text); }
+.view-page .hover\:text-brand-light:hover { color: var(--view-accent); }
+.view-page [class~="border-white/10"], .view-page [class~="border-white/15"] { border-color: var(--view-border); }
+.view-page .hover\:bg-white\/10:hover { background-color: var(--view-hover); }
+.view-page[data-theme="dark"] input[type="password"] {
+  background: var(--view-surface);
+  border-color: var(--view-border);
+  color: var(--view-text);
+}
+.view-page[data-theme="dark"] .text-red-300 { color: #ffaaa0; }
+.view-page[data-theme="dark"] :focus-visible { outline-color: #ffa878; }
+.view-page[data-theme="dark"] .agora-budget-notice {
+  background: #242829;
+  border-color: #414746;
+  color: #c6ccc6;
+}
+.view-page[data-theme="dark"] .agora-budget-notice[data-level="low"] {
+  background: #392e21;
+  border-color: #936d3f;
+  color: #ffd39a;
+}
+.view-page[data-theme="dark"] .agora-budget-notice[data-level="urgent"] {
+  background: #3b2625;
+  border-color: #a76059;
+  color: #ffb7ad;
+}
+.view-page .video-stage .text-white,
+.view-page .video-stage [class~="text-white/80"] { color: #fff; }
+.view-page .video-stage .text-muted, .view-page .video-stage .text-dim { color: #d6d9d5; }
+.view-page .video-stage .text-brand-light { color: #ffa878; }
+.view-page .video-stage .hover\:text-white:hover { color: #fff; }
+.view-page .video-stage .hover\:bg-white\/10:hover { background-color: rgba(255,255,255,.12); }
+.view-page .view-controls button { flex-shrink: 0; }

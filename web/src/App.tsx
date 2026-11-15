@@ -26,7 +26,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/share" element={<NoticeProvider page="share"><SharePage /></NoticeProvider>} />
-        <Route path="/view" element={<NoticeProvider page="view"><ViewPage /></NoticeProvider>} />
+        <Route path="/view" element={<ViewPage />} />
         <Route path="/super" element={<SuperAdminPage />} />
         <Route path="/kook/:serverId" element={<ServerAdminPage />} />
         <Route path="/spaces/:platform/:externalId" element={<ServerAdminPage />} />

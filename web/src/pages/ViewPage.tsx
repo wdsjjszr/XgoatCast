@@ -1,5 +1,5 @@
 import { panelRequest } from '../lib/panels';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, type ReactNode, type Dispatch, type SetStateAction } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -15,23 +15,35 @@ import {
   CheckCircle2,
   Copy,
   MonitorUp,
+  Expand,
+  Shrink,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useSessionSSE } from '../hooks/useSessionSSE';
 import { useAgoraView } from '../hooks/useAgoraView';
 import { cn, copyToClipboard } from '../lib/utils';
 import type { SessionInfo } from '../types';
-import { NoticeBanners } from '../components/notices/NoticeCenter';
+import { NoticeBanners, NoticeProvider } from '../components/notices/NoticeCenter';
 import { getClientEnvironment, markPageOpenOnce } from '../lib/clientEnv';
 import AgoraBudgetNotice from '../components/AgoraBudgetNotice';
+import { readViewPreferences, saveViewPreferences, type ViewPreferences } from '../lib/viewPreferences';
 
 export default function ViewPage() {
   const [params] = useSearchParams();
   const token = params.get('t') || '';
-  return token.startsWith('v_') ? <RoomPasswordGate key={token} token={token} /> : <ViewContent key={token} />;
+  const [preferences, setPreferences] = useState(readViewPreferences);
+  useEffect(() => { saveViewPreferences(preferences); }, [preferences]);
+  const content = <ViewContent key={token} preferences={preferences} setPreferences={setPreferences} />;
+  return <div className="view-page min-h-screen" data-theme={preferences.theme}>
+    <NoticeProvider page="view">
+      {token.startsWith('v_') ? <RoomPasswordGate key={token} token={token}>{content}</RoomPasswordGate> : content}
+    </NoticeProvider>
+  </div>;
 }
 
-function RoomPasswordGate({ token }: { token: string }) {
+function RoomPasswordGate({ token, children }: { token: string; children: ReactNode }) {
   const [allowed, setAllowed] = useState(false);
   const [checking, setChecking] = useState(true);
   const [required, setRequired] = useState(false);
@@ -46,7 +58,7 @@ function RoomPasswordGate({ token }: { token: string }) {
     }).catch(e => { if (!cancelled) setError(e.message); }).finally(() => { if (!cancelled) setChecking(false); });
     return () => { cancelled = true; };
   }, [token]);
-  if (allowed) return <ViewContent />;
+  if (allowed) return <>{children}</>;
   return <div className="min-h-screen flex items-center justify-center p-6"><form className="glass rounded-2xl p-8 w-full max-w-md space-y-5" onSubmit={async e => {
     e.preventDefault(); setBusy(true); setError('');
     try { await panelRequest('share/room-access', { token, password }); setPassword(''); setAllowed(true); }
@@ -54,22 +66,25 @@ function RoomPasswordGate({ token }: { token: string }) {
   }}><h1 className="text-xl font-semibold">{checking ? '正在检查共享…' : '观看共享'}</h1>{required && <><p className="text-sm text-muted">此共享设置了观看密码。</p><input aria-label="观看密码" autoComplete="current-password" className="w-full rounded-xl px-4 py-3 bg-white/5 border border-white/10" type="password" value={password} onChange={e => setPassword(e.target.value)} maxLength={72} required /><button disabled={busy} className="btn-brand rounded-xl px-5 py-3 w-full">{busy ? '验证中…' : '验证并观看'}</button></>}{error && <p role="alert" className="text-red-300 text-sm">{error}</p>}</form></div>;
 }
 
-function ViewContent() {
+function ViewContent({ preferences, setPreferences }: {
+  preferences: ViewPreferences;
+  setPreferences: Dispatch<SetStateAction<ViewPreferences>>;
+}) {
   const [params] = useSearchParams();
   const token = params.get('t') || '';
   const [info, setInfo] = useState<SessionInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const [volume, setVolume] = useState(100);
+  const { muted, volume, pageFullscreen } = preferences;
+  const expanded = isFullscreen || pageFullscreen;
   const [copied, setCopied] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const socket = useSessionSSE(token, 'viewer');
   const active = socket.status === 'active' || (socket.status === 'grace' && socket.graceReason !== 'stopped');
-  const view = useAgoraView(token, active, socket.lowLatency ?? false);
+  const view = useAgoraView(token, active, socket.lowLatency ?? false, preferences);
   const screenRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!token) {
@@ -96,6 +111,24 @@ function ViewContent() {
         setLoading(false);
       });
   }, [token]);
+
+  useEffect(() => () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); }, []);
+
+  useEffect(() => {
+    if (!pageFullscreen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !document.fullscreenElement && !isFullscreen) {
+        setPreferences(current => ({ ...current, pageFullscreen: false }));
+      }
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onEscape);
+    };
+  }, [pageFullscreen, isFullscreen, setPreferences]);
 
   // 鼠标移动时显示控制条，3秒后隐藏
   const handleMouseMove = useCallback(() => {
@@ -162,28 +195,24 @@ function ViewContent() {
 
   // 用户点击开启声音（浏览器阻止自动播放后，用户交互恢复播放）
   const handleEnableAudio = useCallback(() => {
-    setMuted(false);
+    setPreferences(current => ({ ...current, muted: false }));
     view.setAudioMuted(false);
-  }, [view]);
+  }, [view, setPreferences]);
 
   // 音量调节
   const handleVolumeChange = useCallback((newVolume: number) => {
-    setVolume(newVolume);
+    setPreferences(current => ({ ...current, volume: newVolume, muted: newVolume > 0 ? false : current.muted }));
     view.setVolume(newVolume);
     if (newVolume > 0 && muted) {
-      setMuted(false);
       view.setAudioMuted(false);
     }
-  }, [view, muted]);
+  }, [view, muted, setPreferences]);
 
   // 静音切换：操作 Agora audioTrack 而非 DOM video 元素（视频元素不含音频）
   const toggleMute = useCallback(() => {
-    setMuted((m) => {
-      const next = !m;
-      view.setAudioMuted(next);
-      return next;
-    });
-  }, [view]);
+    view.setAudioMuted(!muted);
+    setPreferences(current => ({ ...current, muted: !current.muted }));
+  }, [view, muted, setPreferences]);
 
   if (loading) {
     return (
@@ -216,7 +245,7 @@ function ViewContent() {
       {/* 顶部信息栏 */}
       <header className={cn(
         'fixed top-0 left-0 right-0 z-20 glass-strong px-5 py-3 flex items-center justify-between',
-        isFullscreen && 'hidden'
+        expanded && 'hidden'
       )}>
         <div className="flex items-center gap-3">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand/10 text-brand-light"><MonitorUp size={20} strokeWidth={1.7} /></span>
@@ -226,6 +255,15 @@ function ViewContent() {
           </div>
         </div>
         <div className="flex items-center gap-4">
+          <button
+            onClick={() => setPreferences(current => ({ ...current, theme: current.theme === 'light' ? 'dark' : 'light' }))}
+            title={preferences.theme === 'light' ? '切换深色模式' : '切换浅色模式'}
+            aria-label={preferences.theme === 'light' ? '切换深色模式' : '切换浅色模式'}
+            aria-pressed={preferences.theme === 'dark'}
+            className="p-2 text-muted hover:text-brand-light hover:bg-white/10 transition-colors"
+          >
+            {preferences.theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+          </button>
           <span className="flex items-center gap-1.5 text-sm text-muted">
             <Users className="w-4 h-4" />
             {socket.viewerCount}
@@ -243,19 +281,21 @@ function ViewContent() {
       {/* 视频播放区 */}
       <main className={cn(
         'flex-1 flex flex-col items-center justify-center',
-        !isFullscreen && 'pt-16 pb-8 px-4'
+        !expanded && 'pt-20 pb-8 px-4'
       )}>
-        {!isFullscreen && <div className="w-full max-w-6xl"><NoticeBanners /></div>}
-        {!isFullscreen && !socket.ended && <div className="w-full max-w-6xl mb-3"><AgoraBudgetNotice budget={socket.budgetUpdatedAt ? socket : info || {}} /></div>}
+        {!expanded && <div className="w-full max-w-6xl"><NoticeBanners /></div>}
+        {!expanded && !socket.ended && <div className="w-full max-w-6xl mb-3"><AgoraBudgetNotice budget={socket.budgetUpdatedAt ? socket : info || {}} /></div>}
         <div
           ref={screenRef}
           onMouseMove={handleMouseMove}
           onTouchMove={handleMouseMove}
+          onTouchStart={handleMouseMove}
+          onFocusCapture={handleMouseMove}
           onMouseLeave={() => setShowControls(false)}
           onClick={() => { if (view.audioBlocked) handleEnableAudio(); }}
           className={cn(
             'video-stage relative bg-black shadow-2xl overflow-hidden',
-            isFullscreen
+            expanded
               ? 'fixed inset-0 z-50 w-screen h-screen rounded-none'
               : 'w-full max-w-6xl aspect-video rounded-2xl'
           )}
@@ -297,13 +337,13 @@ function ViewContent() {
 
           {/* 音频被阻止提示：浏览器自动播放策略限制 */}
           {view.audioBlocked && view.hasAudio && (
-            <div
-              onClick={handleEnableAudio}
+            <button
+              onClick={event => { event.stopPropagation(); handleEnableAudio(); }}
               className="absolute top-4 left-1/2 -translate-x-1/2 z-30 cursor-pointer bg-brand/90 hover:bg-brand text-white px-4 py-2 rounded-full shadow-lg shadow-brand/30 flex items-center gap-2 transition-all animate-pulse"
             >
               <Volume2 className="w-4 h-4" />
               <span className="text-sm font-medium">点击开启声音</span>
-            </div>
+            </button>
           )}
           {socket.ended && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
@@ -312,63 +352,79 @@ function ViewContent() {
             </div>
           )}
 
-          {isFullscreen && !socket.ended && socket.estimatedRemainingSec != null && socket.estimatedRemainingSec < 900 && <div className="absolute top-3 left-3 right-3 z-10"><AgoraBudgetNotice budget={socket} /></div>}
+          {expanded && !socket.ended && socket.estimatedRemainingSec != null && socket.estimatedRemainingSec < 900 && <div className="absolute top-3 left-3 right-3 z-10"><AgoraBudgetNotice budget={socket} /></div>}
           {/* 播放器控制条 - 右下角，类似标准浏览器播放器 */}
-          {view.hasVideo && !socket.ended && (
-            <div
-              className={cn(
-                'absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-4 py-3 flex items-center justify-end gap-2 transition-opacity duration-300',
-                showControls ? 'opacity-100' : 'opacity-0 pointer-events-none',
-              )}
-            >
-              {/* 左侧：观看人数 */}
-              <span className="flex items-center gap-1.5 text-xs text-white/80 mr-auto">
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                {socket.viewerCount} 人在看
-              </span>
+          <div
+            onClick={event => event.stopPropagation()}
+            className={cn(
+              'view-controls absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-3 sm:px-4 py-3 flex items-center justify-end gap-1 sm:gap-2 transition-opacity duration-300 focus-within:opacity-100 focus-within:pointer-events-auto',
+              showControls || !view.hasVideo || socket.ended ? 'opacity-100' : 'opacity-0 pointer-events-none',
+            )}
+          >
+            {/* 左侧：观看人数 */}
+            <span className="flex items-center gap-1.5 text-xs text-white/80 mr-auto">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              {socket.viewerCount} 人在看
+            </span>
 
-              {/* 右侧控制按钮 */}
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={toggleMute}
-                  title={muted ? '取消静音' : '静音'}
-                  className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-                >
-                  {muted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-                </button>
-                {/* 音量滑动条 */}
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={muted ? 0 : volume}
-                  onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                  className="w-20 h-1 bg-white/30 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                  title={`音量: ${muted ? 0 : volume}%`}
-                />
-              </div>
-
+            {/* 右侧控制按钮 */}
+            <div className="flex items-center gap-1">
               <button
-                onClick={togglePiP}
-                title="画中画"
+                onClick={toggleMute}
+                title={muted ? '取消静音' : '静音'}
+                aria-label={muted ? '取消静音' : '静音'}
+                aria-pressed={muted}
                 className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors"
               >
-                <PictureInPicture2 className="w-5 h-5" />
+                {muted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
               </button>
-
-              <button
-                onClick={toggleFullscreen}
-                title={isFullscreen ? '退出全屏' : '全屏'}
-                className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-              >
-                {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
-              </button>
+              {/* 音量滑动条 */}
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={muted ? 0 : volume}
+                onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                aria-label="音量"
+                className="w-16 sm:w-20 h-1 bg-white/30 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+                title={`音量: ${muted ? 0 : volume}%`}
+              />
             </div>
-          )}
+
+            <button
+              onClick={togglePiP}
+              title="画中画"
+              aria-label="画中画"
+              disabled={!view.hasVideo || socket.ended}
+              className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40"
+            >
+              <PictureInPicture2 className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={() => setPreferences(current => ({ ...current, pageFullscreen: !current.pageFullscreen }))}
+              title={pageFullscreen ? '退出页面全屏' : '页面全屏'}
+              aria-label={pageFullscreen ? '退出页面全屏' : '页面全屏'}
+              aria-pressed={pageFullscreen}
+              className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              {pageFullscreen ? <Shrink className="w-5 h-5" /> : <Expand className="w-5 h-5" />}
+            </button>
+
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? '退出全屏' : '全屏'}
+              aria-label={isFullscreen ? '退出全屏' : '全屏'}
+              aria-pressed={isFullscreen}
+              className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+            </button>
+          </div>
         </div>
 
         {/* 播放器下方信息栏：连接状态、观看人数、可复制链接 */}
-        {!isFullscreen && info && (
+        {!expanded && info && (
           <div className="w-full max-w-6xl mt-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <span className={cn('w-2 h-2 rounded-full', socket.connected ? 'bg-green-400' : 'bg-yellow-400', 'animate-pulse')} />

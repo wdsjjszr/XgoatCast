@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-async function fixture() {
+async function fixture(preferences = { volume: 100, muted: false }) {
   const effects: Array<() => (() => void) | void> = [];
   const listeners = new Map<string, (...args: any[]) => any>();
   let state: any;
@@ -31,7 +31,7 @@ async function fixture() {
       throw new Error(name);
     },
   });
-  const hook = module.exports.useAgoraView('test-share-token', true, true);
+  const hook = module.exports.useAgoraView('test-share-token', true, true, preferences);
   const cleanups = effects.map(effect => effect());
   await new Promise(resolve => setImmediate(resolve));
   return { hook, sdk, state: () => state,
@@ -65,5 +65,24 @@ test('resubscribed audio uses the current volume and mute state', async () => {
   publisher.audioTrack = audio();
   await f.emit('user-published', publisher, 'audio');
   assert.equal(volumes.at(-1), 37);
+  f.cleanup();
+});
+
+test('stored audio preferences apply before the first playback and survive autoplay blocking', async () => {
+  const f = await fixture({ volume: 28, muted: true });
+  const volumes: number[] = [];
+  const publisher = { uid: 1, hasAudio: true, audioTrack: {
+    play() { assert.equal(volumes.at(-1), 0); }, stop() {}, setVolume(value: number) { volumes.push(value); },
+  } };
+  await f.emit('user-published', publisher, 'audio');
+  assert.equal(volumes.at(-1), 0);
+  f.sdk.onAutoplayFailed();
+  assert.equal(f.state().audioBlocked, true);
+  f.hook.setAudioMuted(false);
+  assert.equal(volumes.at(-1), 28);
+  assert.equal(f.state().audioBlocked, false);
+  await f.emit('user-unpublished', publisher, 'audio');
+  publisher.audioTrack.play = () => { assert.equal(volumes.at(-1), 28); };
+  await f.emit('user-published', publisher, 'audio');
   f.cleanup();
 });
