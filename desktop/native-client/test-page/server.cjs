@@ -60,8 +60,7 @@ function readBody(req) {
   });
 }
 function rtcToken(role, uid) {
-  const expiresAt = Math.floor(Date.now()/1000) + 3600;
-  return RtcTokenBuilder.buildTokenWithUid(appId, certificate, session.channel, uid, role, expiresAt, expiresAt);
+  return RtcTokenBuilder.buildTokenWithUid(appId, certificate, session.channel, uid, role, 3600, 3600);
 }
 setInterval(() => {
   if (session.status === 'active' && Date.now() - session.heartbeatAt > 8000) {
@@ -85,7 +84,12 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method==='GET' && url.pathname==='/api/share/token') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}
-      session.requests.token++;const publisher=url.searchParams.get('role')==='publisher';const uid=publisher?1:crypto.randomInt(100,99999);
+      const role=url.searchParams.get('role');
+      if(role!==null&&role!=='publisher'&&role!=='subscriber'){json(res,400,{message:'RTC 角色无效'});return;}
+      const publisher=role==='publisher';const requestedUid=url.searchParams.get('uid');
+      const uid=requestedUid===null?(publisher?1:crypto.randomInt(100,99999)):Number(requestedUid);
+      if((requestedUid!==null&&!/^[1-9]\d{0,9}$/.test(requestedUid))||!Number.isInteger(uid)||uid<1||uid>0xffffffff||(publisher?uid!==1:uid===1)){json(res,400,{message:'RTC UID 无效'});return;}
+      session.requests.token++;
       json(res,200,{token:rtcToken(publisher?RtcRole.PUBLISHER:RtcRole.SUBSCRIBER,uid),channel:session.channel,uid,appId,expireSec:3600});return;
     }
     if (req.method==='POST' && url.pathname==='/api/share/start') {

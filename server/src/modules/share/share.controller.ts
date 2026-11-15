@@ -16,6 +16,7 @@ import { SessionService } from '../session/session.service';
 import { AgoraRole } from '../agora/agora.types';
 import { DatabaseService } from '../database/database.service';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { rtcDiagnostic } from './rtc-diagnostic';
 
 @Controller('api/share')
 export class ShareController {
@@ -54,9 +55,19 @@ export class ShareController {
 
   @Get('token')
   @UseGuards(ShareTokenGuard)
-  token(@Req() req: any, @Query('role') role: string) {
+  token(@Req() req: any, @Query('role') role: string, @Query('uid') requestedUid?: string) {
+    if (role !== undefined && role !== 'publisher' && role !== 'subscriber') {
+      throw new HttpException('invalid RTC role', HttpStatus.BAD_REQUEST);
+    }
     const r: AgoraRole = role === 'publisher' ? 'publisher' : 'subscriber';
-    const uid = r === 'publisher' ? 1 : Math.floor(Math.random() * 99999) + 100;
+    const uid = requestedUid === undefined
+      ? (r === 'publisher' ? 1 : Math.floor(Math.random() * 99999) + 100)
+      : Number(requestedUid);
+    if ((requestedUid !== undefined && (typeof requestedUid !== 'string' || !/^[1-9]\d{0,9}$/.test(requestedUid))) ||
+        !Number.isInteger(uid) || uid < 1 || uid > 0xffffffff ||
+        (r === 'publisher' ? uid !== 1 : uid === 1)) {
+      throw new HttpException('invalid RTC uid for role', HttpStatus.BAD_REQUEST);
+    }
     const serverId = req.session.spaceId || '';
     const result = this.agora.generateToken(req.session.channel, uid, r, serverId);
     if (!result.appId) {
@@ -103,6 +114,7 @@ export class ShareController {
   @UseGuards(ShareTokenGuard)
   stop(@Req() req: any) {
     const session = this.sessionService.stopSharing(req.session.token);
+    if (session) this.logger.log(JSON.stringify({ eventType: 'share_stopped', sessionId: session.id, role: 'publisher' }));
     return { ok: !!session };
   }
 
@@ -119,6 +131,14 @@ export class ShareController {
   @Post('telemetry')
   @UseGuards(ShareTokenGuard)
   telemetry(@Req() req: any, @Body() body: any) {
+    if (body?.eventType === 'rtc_diagnostic') {
+      const diagnostic = rtcDiagnostic(req.session.id, body);
+      if (!diagnostic || (req.panelViewer && diagnostic.role === 'publisher')) {
+        throw new HttpException('invalid RTC diagnostic', HttpStatus.BAD_REQUEST);
+      }
+      this.logger.log(JSON.stringify(diagnostic));
+      return { ok: true };
+    }
     this.analytics.recordClientTelemetry(req.session, {
       pageType: body?.pageType,
       eventType: body?.eventType,

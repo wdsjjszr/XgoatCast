@@ -6,6 +6,8 @@ import type {
 } from 'agora-rtc-sdk-ng';
 import { api } from '../lib/api';
 import { installScreenAudioInterceptor } from '../lib/screenAudioCapture';
+import { createRtcLog, installRtcTokenRenewal, rtcErrorCode } from '../lib/rtcLifecycle';
+import type { RtcLog } from '../lib/rtcLifecycle';
 
 // Resolve the SDK when the user starts; a failed CDN load must not crash the page.
 
@@ -75,6 +77,12 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
   const screenAudioRef = useRef<ILocalAudioTrack | null>(null);
   const microphoneRef = useRef<ILocalAudioTrack | null>(null);
   const microphoneOperationRef = useRef(false);
+  const operationRef = useRef(0);
+  const stoppingRef = useRef(false);
+  const stopPromiseRef = useRef<Promise<void> | null>(null);
+  const rejoiningRef = useRef(false);
+  const renewalRef = useRef<ReturnType<typeof installRtcTokenRenewal> | null>(null);
+  const logRef = useRef<RtcLog | null>(null);
   const onTrackEndedRef = useRef(onTrackEnded);
   onTrackEndedRef.current = onTrackEnded;
   const [isSharing, setIsSharing] = useState(false);
@@ -105,15 +113,21 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
         bitrateMax?: number;
       };
     }) => {
-      if (publishingRef.current || clientRef.current) {
+      if (publishingRef.current || stoppingRef.current || clientRef.current) {
         return { success: false, message: '正在启动或共享中，请勿重复点击。' };
       }
       publishingRef.current = true;
+      const operation = ++operationRef.current;
+      let client: IAgoraRTCClient | null = null;
+      let stage: 'join' | 'publish' = 'join';
+      const log = createRtcLog(token, 'publisher', (window as any).AgoraRTC?.VERSION);
+      logRef.current = log;
+      const check = () => { if (operationRef.current !== operation) throw new Error('RTC operation cancelled'); };
       setError('');
       try {
         const AgoraRTC = (window as any).AgoraRTC;
         if (!AgoraRTC) {
-          throw new Error('Agora SDK 未加载，请检查网络连接');
+          throw Object.assign(new Error('Agora SDK 未加载，请检查网络连接'), { code: 'RTC_SDK_UNAVAILABLE' });
         }
 
         AgoraRTC.setLogLevel(2);
@@ -145,6 +159,10 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
             restrictOwnAudio: true,  // 过滤本浏览器标签页音频，防回声
           },
         );
+        if (operationRef.current !== operation) {
+          for (const track of Array.isArray(screenTrack) ? screenTrack : [screenTrack]) track.close();
+          return { success: false, message: '共享已取消' };
+        }
 
         if (Array.isArray(screenTrack)) {
           screenVideoRef.current = screenTrack[0];
@@ -160,38 +178,76 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
 
         // Capture directly from the click, before network waits consume user activation.
         const tokenResp = await api.getShareToken(token, 'publisher');
+        check();
 
         // 3. 用户已选择窗口，现在连接服务器
         // 极速直播（默认）：mode:'live' + host 角色，观众端用 audience+level:1
         // 低延迟模式：mode:'rtc'，超低延时 400-800ms
-        const client = opts.lowLatency
+        client = opts.lowLatency
           ? AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' })
           : AgoraRTC.createClient({ mode: 'live', codec: 'h264' });
         clientRef.current = client;
+        const currentClient = client;
+        const current = () => operationRef.current === operation && clientRef.current === currentClient;
+        const uid = tokenResp.uid;
+        logRef.current = (event, fields) => log(event, { uid, ...fields });
+        client.on('connection-state-change', (state, _previous, reason) => {
+          if (current()) log('connection_change', { uid, state, reason });
+        });
+        renewalRef.current = installRtcTokenRenewal({
+          client, token, role: 'publisher', identity: tokenResp, isCurrent: current, log,
+          beforeRejoin: () => {
+            rejoiningRef.current = true;
+            log('unpublish', { uid, reason: 'TOKEN_RECOVERY' });
+          },
+          afterRejoin: async () => {
+            const currentTracks = [screenVideoRef.current, screenAudioRef.current, microphoneRef.current].filter(Boolean) as (ILocalVideoTrack | ILocalAudioTrack)[];
+            try { await currentClient.publish(currentTracks); }
+            catch (error) { if (current()) log('publish_failed', { uid, errorCode: rtcErrorCode(error) }); throw error; }
+            rejoiningRef.current = false;
+            if (current()) log('publish_success', { uid, reason: 'TOKEN_RECOVERY' });
+          },
+          onError: () => {
+            setError('共享连接续期失败，请重新开始共享。');
+            void stop('TOKEN_RECOVERY');
+            onTrackEndedRef.current?.();
+          },
+        });
 
         // 极速直播共享者必须先切 host 才能 publish
         if (!opts.lowLatency) {
           await client.setClientRole('host');
+          check();
         }
 
+        log('join_start', { uid });
         await client.join(
           tokenResp.appId,
           tokenResp.channel,
           tokenResp.token || null,
           tokenResp.uid,
         );
+        check();
+        log('join_success', { uid });
 
         // 4. 发布轨道
+        stage = 'publish';
         if (opts.microphoneEnabled) {
           try {
-            microphoneRef.current = await AgoraRTC.createMicrophoneAudioTrack();
+            const microphone = await AgoraRTC.createMicrophoneAudioTrack();
+            if (!current()) { microphone.close(); check(); }
+            microphoneRef.current = microphone;
             tracks.push(microphoneRef.current);
           } catch {
             throw new Error('无法开启麦克风，请检查浏览器的麦克风权限和设备连接');
           }
         }
         await client.publish(tracks);
+        check();
+        log('publish_success', { uid });
         screenVideoRef.current?.on('track-ended', () => {
+          if (!current()) return;
+          log('capture_ended', { uid, reason: 'CAPTURE_ENDED' });
           // track 意外结束（用户通过浏览器原生 UI 停止、或高分辨率导致资源不足）
           // 通知父组件发送 sharing_stopped，让 session 进入 60 秒恢复宽限期
           stop();
@@ -200,6 +256,11 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
         setIsSharing(true);
         return { success: true };
       } catch (e: any) {
+        if (operationRef.current !== operation) {
+          try { await client?.leave(); } catch {}
+          return { success: false, message: '共享已取消' };
+        }
+        logRef.current?.(stage === 'join' ? 'join_failed' : 'publish_failed', { errorCode: rtcErrorCode(e) });
         // 失败时清理已创建的 Agora 资源，避免泄漏
         await stop();
         let msg = e?.message || String(e);
@@ -231,7 +292,7 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
 
   const setMicrophoneEnabled = useCallback(async (enabled: boolean): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client || publishingRef.current || microphoneOperationRef.current) return false;
+    if (!client || publishingRef.current || rejoiningRef.current || microphoneOperationRef.current) return false;
     if (enabled === !!microphoneRef.current) return true;
     microphoneOperationRef.current = true;
     setMicrophoneBusy(true);
@@ -241,12 +302,14 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
       try {
         const AgoraRTC = (window as any).AgoraRTC;
         track = await AgoraRTC.createMicrophoneAudioTrack();
-        if (clientRef.current !== client) { track.close(); return false; }
+        if (clientRef.current !== client || rejoiningRef.current) { track.close(); return false; }
         microphoneRef.current = track;
         await client.publish(track);
         if (clientRef.current !== client || microphoneRef.current !== track) return false;
+        logRef.current?.('publish_success', { mediaType: 'audio', reason: 'MICROPHONE' });
         return true;
-      } catch {
+      } catch (error) {
+        logRef.current?.('publish_failed', { mediaType: 'audio', reason: 'MICROPHONE', errorCode: rtcErrorCode(error) });
         if (microphoneRef.current === track) microphoneRef.current = null;
         track?.close();
         setError('无法开启麦克风，请检查浏览器的麦克风权限和设备连接');
@@ -260,6 +323,7 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
     microphoneRef.current = null;
     try {
       if (track) await client.unpublish(track);
+      logRef.current?.('unpublish', { mediaType: 'audio', reason: 'MICROPHONE' });
       return true;
     } catch {
       setError('麦克风已停止采集，但通知观众时出现问题，请停止共享后重试');
@@ -271,7 +335,8 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
     }
   }, []);
 
-  const stop = useCallback(async () => {
+  const stop = useCallback(async (reason = 'STOP') => {
+    if (stoppingRef.current) return stopPromiseRef.current;
     const client = clientRef.current;
     const tracks = [screenVideoRef.current, screenAudioRef.current, microphoneRef.current];
     screenVideoRef.current = null;
@@ -283,9 +348,31 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
       try { track?.stop(); } catch {}
       try { track?.close(); } catch {}
     }
-    try { if (client) await client.leave(); } catch (e) { console.error('leave error', e); }
     setIsSharing(false);
+    operationRef.current++;
+    stoppingRef.current = true;
+    rejoiningRef.current = false;
+    const renewal = renewalRef.current;
+    renewalRef.current = null;
+    if (client) {
+      logRef.current?.('unpublish', { reason });
+      client.removeAllListeners();
+    }
+    stopPromiseRef.current = (async () => {
+      try {
+        await renewal?.dispose();
+        if (client) await client.leave();
+        if (client) logRef.current?.('rtc_leave', { reason });
+      } catch (error) {
+        logRef.current?.('rtc_leave', { reason, errorCode: rtcErrorCode(error) });
+      } finally {
+        stoppingRef.current = false;
+      }
+    })();
+    await stopPromiseRef.current;
   }, []);
+
+  useEffect(() => () => { void stop('CLEANUP'); }, [token, stop]);
 
   return { isSharing, error, microphoneBusy, publish, setMicrophoneEnabled, stop, setLocalPreviewContainer };
 }

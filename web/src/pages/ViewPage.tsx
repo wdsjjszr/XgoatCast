@@ -267,7 +267,7 @@ function ViewContent() {
           />
 
           {/* 加载/等待/暂停状态：未加入、暂停宽限期、或等待分享者开始 */}
-          {(!view.joined || socket.status === 'grace' || socket.status === 'pending') && !socket.ended && (
+          {(!view.joined || socket.status === 'grace' || socket.status === 'pending') && !socket.ended && !view.error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
               <Loader2 className="w-8 h-8 text-brand animate-spin" />
               <p className="text-sm text-muted">
@@ -280,9 +280,16 @@ function ViewContent() {
             </div>
           )}
           {/* 纯音频占位：已加入、无视频、非暂停、非等待中 */}
-          {view.joined && !view.hasVideo && socket.status !== 'grace' && socket.status !== 'pending' && !socket.ended && (
+          {view.joined && !view.hasVideo && socket.status !== 'grace' && socket.status !== 'pending' && !socket.ended && !view.error && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <Volume2 className="w-10 h-10 text-muted animate-pulse" />
+            </div>
+          )}
+
+          {view.error && !socket.ended && (
+            <div role="alert" className="absolute inset-x-4 top-4 z-20 rounded-lg border border-red-400/40 bg-black/90 p-4 text-center">
+              <p className="text-sm text-white">{view.error}</p>
+              <button onClick={() => window.location.reload()} className="mt-2 text-sm text-brand-light underline underline-offset-4">重新连接</button>
             </div>
           )}
 

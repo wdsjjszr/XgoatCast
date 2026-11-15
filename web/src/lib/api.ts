@@ -15,6 +15,7 @@ import type {
   ShareAnalyticsRecord,
   ShareTelemetryPayload,
 } from '../types/analytics';
+import type { RtcDiagnosticPayload } from './rtcLifecycle';
 
 const SUPER_TOKEN_KEY = 'xgoat_super_token';
 export type Platform = 'kook' | 'heychat' | 'qq' | 'discord';
@@ -216,9 +217,12 @@ export const api = {
   getShareToken(
     token: string,
     role: 'publisher' | 'subscriber',
+    uid?: number,
+    signal?: AbortSignal,
   ): Promise<AgoraTokenResponse> {
     return request(
-      '/api/share/token?t=' + encodeURIComponent(token) + '&role=' + role,
+      '/api/share/token?t=' + encodeURIComponent(token) + '&role=' + role + (uid === undefined ? '' : '&uid=' + uid),
+      { signal },
     );
   },
 
@@ -243,7 +247,7 @@ export const api = {
     });
   },
 
-  reportShareTelemetry(payload: ShareTelemetryPayload): Promise<{ ok: boolean }> {
+  reportShareTelemetry(payload: ShareTelemetryPayload | RtcDiagnosticPayload): Promise<{ ok: boolean }> {
     return request('/api/share/telemetry', {
       method: 'POST',
       body: JSON.stringify(payload),

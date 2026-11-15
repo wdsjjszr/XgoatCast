@@ -21,6 +21,10 @@ function load(sdk: any, api: any = {}) {
         useState: (value: any) => [value, (next: any) => { if (typeof next === 'string') errors.push(next); }],
       };
       if (name.includes('screenAudioCapture')) return { installScreenAudioInterceptor() {} };
+      if (name.includes('rtcLifecycle')) return {
+        createRtcLog: () => () => {}, rtcErrorCode: () => 'RTC_ERROR',
+        installRtcTokenRenewal: () => ({ dispose: async () => {} }),
+      };
       if (name.includes('/api')) return { api };
       throw new Error(name);
     },
@@ -32,7 +36,7 @@ function fixture() {
   let closed = 0;
   let left = 0;
   const video = { stop() {}, close() { closed++; }, on() {}, removeAllListeners() {} };
-  const client = { async setClientRole() {}, async join() {}, async publish() {}, async leave() { left++; } };
+  const client = { on() {}, removeAllListeners() {}, async setClientRole() {}, async join() {}, async publish() {}, async leave() { left++; } };
   const sdk = { setLogLevel() {}, createScreenVideoTrack: async () => video, createClient: () => client };
   const api = { getShareToken: async () => ({ appId: 'id', channel: 'channel', token: 'token', uid: 1 }) };
   return { sdk, api, client, counts: () => ({ closed, left }) };
