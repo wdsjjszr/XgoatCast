@@ -735,7 +735,7 @@ function ServerConfigPanel({ platform, serverId }: { platform: Platform; serverI
       >
         {saving ? '保存中...' : saved ? '已保存' : '保存配置'}
       </button>
-      {platform === 'heychat' && <div className="border-t border-white/10 pt-6"><AgoraAccountsPanel key={accountsRevision} space={{ platform, externalId: serverId }} /></div>}
+      {platform === 'heychat' && <div className="border-t border-white/10 pt-6"><AgoraAccountsPanel key={accountsRevision} space={{ platform, externalId: serverId }} poolEnabled={!!config.agoraAccountPoolEnabled} onPoolChange={enabled => update(['agoraAccountPoolEnabled'], enabled)} /></div>}
     </div>
   );
 }

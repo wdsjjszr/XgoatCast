@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { SessionStatus } from '../types';
+import type { AgoraBudget, SessionStatus } from '../types';
 import { api } from '../lib/api';
 
-interface SessionState {
+interface SessionState extends AgoraBudget {
   connected: boolean;
   status: SessionStatus | null;
   viewerCount: number;
@@ -90,6 +90,14 @@ export function useSessionSSE(token: string, role: 'publisher' | 'viewer', passi
           idleRemainingSec: data.idleRemainingSec,
           noViewerRemainingSec: data.noViewerRemainingSec,
           lowLatency: data.lowLatency,
+          agoraAccountLabel: data.agoraAccountLabel,
+          remainingStandardMinutes: data.remainingStandardMinutes,
+          estimatedRemainingSec: data.estimatedRemainingSec,
+          rtcUsageRate: data.rtcUsageRate,
+          budgetUpdatedAt: data.budgetUpdatedAt,
+          usageCalibratedAt: data.usageCalibratedAt,
+          usageEstimateStatus: data.usageEstimateStatus,
+          budgetEstimateStatus: data.budgetEstimateStatus,
         }));
       } catch {
         // ignore parse errors

@@ -359,7 +359,14 @@ void paintStatusFooter(Graphics&g){
   else if(hasLaunch&&state.serverObservedAt&&GetTickCount64()-state.serverObservedAt<10000){notice=L"连接服务器成功";light=ui::success;}
   else if(hasLaunch&&state.phase==Phase::Loading)notice=L"正在连接服务器…";
   else notice=hasLaunch?L"正在确认服务器连接…":L"等待网页唤起，尚未连接服务器";
-  signalDot(g,28,top+28,light);label(g,notice,RectF(44,top+10,uiWidth()-64,36),13,text);hint(9001,RectF(16,top+4,uiWidth()-32,48),notice);
+  bool hasBudget=!state.budgetText.empty();
+  signalDot(g,28,top+(hasBudget?20:28),light);label(g,notice,RectF(44,top+10,uiWidth()-64,hasBudget?20:36),13,text);hint(9001,RectF(16,top+4,uiWidth()-32,hasBudget?26:48),notice);
+  if(!state.budgetText.empty()){
+    Color ink=state.estimatedRemainingSec>=0&&state.estimatedRemainingSec<300?ui::error:state.estimatedRemainingSec>=0&&state.estimatedRemainingSec<900?ui::warning:muted;
+    label(g,L"账号："+state.agoraAccountLabel,RectF(20,top+32,144,20),12,muted);
+    label(g,state.budgetText,RectF(172,top+32,uiWidth()-192,20),12,ink);
+    hint(9007,RectF(16,top+30,uiWidth()-32,24),L"账号："+state.agoraAccountLabel+L" · "+state.budgetText+L"\n"+state.budgetDetail);
+  }
 }
 void paintSession(Graphics&g){
   bool live=state.phase==Phase::Sharing,starting=state.phase==Phase::Starting,stopping=state.phase==Phase::Stopping;
@@ -822,7 +829,9 @@ void uiSelfTest(const std::wstring&output){
   require(layout::livePreview.Width*layout::livePreview.Height>uiWidth()*(uiHeight()-layout::titleHeight-layout::statusHeight)*.5f,"Preview does not dominate the compact layout");
   {
     auto hasCaption=[&](const wchar_t*caption){return std::any_of(textRuns.begin(),textRuns.end(),[&](const TextRun&r){return r.value==caption;});};
+    state.agoraAccountLabel=L"联调账号";state.budgetText=L"按当前负载预计可用约 4 分钟 · 额度即将耗尽";state.estimatedRemainingSec=240;
     auto savedViewers=state.viewers;state.viewers=0;state.observedAt=GetTickCount64();capturePreview(output+L".zero-viewers.png");require(hasCaption(L"（93秒后自动停止）")&&!hasCaption(L"无人观看剩余"),"Zero-viewer inline timeout missing");
+    require(hasCaption(state.budgetText.c_str())&&std::any_of(tips.begin(),tips.end(),[](const Tip&t){return t.id==9007;}),"Account budget or tooltip missing");
     auto notice=std::find_if(textRuns.begin(),textRuns.end(),[](const TextRun&r){return r.value==L"共享中";});require(notice!=textRuns.end()&&notice->rect.Y==uiHeight()-layout::statusHeight+10,"Sharing status is not in the common footer");
     state.viewers=3;capturePreview(output+L".with-viewers.png");require(std::none_of(tips.begin(),tips.end(),[](const Tip&t){return t.id==9002;}),"Viewers retained automatic-stop hint");state.viewers=savedViewers;capturePreview(output+L".compact.png");
     require((GetWindowLongPtrW(window,GWL_STYLE)&(WS_BORDER|WS_DLGFRAME|WS_THICKFRAME))==0,"Window retained a system frame");
@@ -875,7 +884,7 @@ void uiSelfTest(const std::wstring&output){
   for(auto&item:std::vector<std::pair<const char*,Color>>{{"success",ui::success},{"warning",ui::warning},{"error",ui::error},{"info",ui::info}})checkRatio(item.first,item.second,canvas,4.5f);
   checkRatio("label/orange",orangeInk,orange,4.5f);
   settings.lowLatency=true;motions[90]=Motion{0,1,GetTickCount64()-75};capturePreview(output+L".switch.png");
-  std::ofstream file{std::filesystem::path(output)};file<<Json{{"aboutDialog",true},{"trayHoverRendering",true},{"updatePrompt",true},{"microphoneSelection",true},{"sharedStatusFooter",true},{"inlineAutoStop",true},{"framelessWindow",true},{"dpiIcons",true},{"waitingConnection",true},{"connectionPriority",true},{"trayMenuPlacement",true},{"blockedSmallPanel",true},{"customMenus",true},{"selectionPreview",true},{"qualityMenuPolicy",true},{"pointerCancellation",true},{"sourceSelection",true},{"compactHitTargets",true},{"waitingGuard",true},{"reducedMotion",true},{"immediateExpansion",true},{"countdownSemantics",true},{"hoverHints",true},{"independentSoundPanel",true},{"compactControlsHidden",true},{"layoutBounds",true},{"scrollRegions",true},{"titlebarHitTargets",true},{"automaticLayout",true},{"compactAudioInteraction",true},{"audioRefreshCancellation",true},{"previewPresentation",true},{"waitingHasNoTimer",true},{"noManualLayout",true},{"contrast",ratios}}.dump(2);
+  std::ofstream file{std::filesystem::path(output)};file<<Json{{"aboutDialog",true},{"trayHoverRendering",true},{"updatePrompt",true},{"microphoneSelection",true},{"sharedStatusFooter",true},{"accountBudget",true},{"inlineAutoStop",true},{"framelessWindow",true},{"dpiIcons",true},{"waitingConnection",true},{"connectionPriority",true},{"trayMenuPlacement",true},{"blockedSmallPanel",true},{"customMenus",true},{"selectionPreview",true},{"qualityMenuPolicy",true},{"pointerCancellation",true},{"sourceSelection",true},{"compactHitTargets",true},{"waitingGuard",true},{"reducedMotion",true},{"immediateExpansion",true},{"countdownSemantics",true},{"hoverHints",true},{"independentSoundPanel",true},{"compactControlsHidden",true},{"layoutBounds",true},{"scrollRegions",true},{"titlebarHitTargets",true},{"automaticLayout",true},{"compactAudioInteraction",true},{"audioRefreshCancellation",true},{"previewPresentation",true},{"waitingHasNoTimer",true},{"noManualLayout",true},{"contrast",ratios}}.dump(2);
 }
 void selfTest(const std::wstring& output){
   Json manifest={{"product","XgoatCast"},{"version","0.0.1-beta.2"},{"downloadUrl","https://example.com/setup.exe"},{"releasePageUrl","https://cast.xgoat.top/downloads.html"},{"notes","版本更新"}};

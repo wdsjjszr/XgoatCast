@@ -17,7 +17,7 @@ export class AgoraService {
   }
 
   /** Generate token with per-server Agora config */
-  generateToken(channel: string, uid: number, role: AgoraRole, serverId?: string): AgoraTokenResponse {
+  generateToken(channel: string, uid: number, role: AgoraRole, serverId?: string, account?: { app_id: string; app_certificate: string }): AgoraTokenResponse {
     // Try server-specific config first
     let appId = '';
     let cert = '';
@@ -31,6 +31,7 @@ export class AgoraService {
         expireSec = server.agoraTokenExpireSec;
       }
     }
+    if (account) { appId = account.app_id; cert = account.app_certificate; }
 
     if (!appId || !cert) {
       this.logger.warn('Agora App ID or Certificate not configured for server ' + (serverId || 'unknown'));

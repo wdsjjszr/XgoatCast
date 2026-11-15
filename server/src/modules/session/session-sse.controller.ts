@@ -222,6 +222,14 @@ export class SessionSseController implements OnModuleInit {
       idleRemainingSec: info.idleRemainingSec,
       noViewerRemainingSec: info.noViewerRemainingSec,
       lowLatency: session.lowLatency,
+      agoraAccountLabel: info.agoraAccountLabel,
+      remainingStandardMinutes: info.remainingStandardMinutes,
+      estimatedRemainingSec: info.estimatedRemainingSec,
+      rtcUsageRate: info.rtcUsageRate,
+      budgetUpdatedAt: info.budgetUpdatedAt,
+      usageCalibratedAt: info.usageCalibratedAt,
+      usageEstimateStatus: info.usageEstimateStatus,
+      budgetEstimateStatus: info.budgetEstimateStatus,
     };
   }
 

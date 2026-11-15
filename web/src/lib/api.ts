@@ -270,6 +270,9 @@ export const api = {
 
   // ===== Super Admin API =====
   getAgoraAccounts(space?: AgoraAccountSpace): Promise<AgoraAccountInfo[]> { return agoraAccountsRequest('', {}, space); },
+  setAgoraAccountPool(space: AgoraAccountSpace, enabled: boolean): Promise<{ ok: boolean }> {
+    return spaceRequest(space.platform, space.externalId, spaceApiBase(space.platform, space.externalId) + '/agora-account-pool', { method: 'PUT', body: JSON.stringify({ enabled }) });
+  },
   saveAgoraAccount(id: string | undefined, body: AgoraAccountWrite, space?: AgoraAccountSpace): Promise<AgoraAccountInfo> {
     return agoraAccountsRequest(id ? '/' + encodeURIComponent(id) : '', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) }, space);
   },

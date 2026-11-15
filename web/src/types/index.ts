@@ -1,6 +1,17 @@
 export type SessionStatus = 'pending' | 'active' | 'grace' | 'ended';
 
-export interface SessionInfo {
+export interface AgoraBudget {
+  agoraAccountLabel?: string;
+  remainingStandardMinutes?: number | null;
+  estimatedRemainingSec?: number | null;
+  rtcUsageRate?: number;
+  budgetUpdatedAt?: number;
+  usageCalibratedAt?: number | null;
+  usageEstimateStatus?: string;
+  budgetEstimateStatus?: string;
+}
+
+export interface SessionInfo extends AgoraBudget {
   rtcStandardSeconds?: number | null;
   usageEstimateStatus?: string;
   id: string;

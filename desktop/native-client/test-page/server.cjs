@@ -31,7 +31,7 @@ function createSession() {
     token: crypto.randomBytes(24).toString('base64url'), channel: 'xc_native_test_' + id,
     status: 'pending', publisherClientId: null, lowLatency: false,
     quality: null, createdAt: Date.now(), heartbeatAt: 0,
-    requests: {info:0, token:0, start:0},
+    requests: {info:0, preview:0, token:0, start:0},
   };
 }
 function json(res, status, value) {
@@ -49,6 +49,9 @@ function info() {
       '480p_2':{bitrateMax:1000}, '720p30':{bitrateMax:2500}, '1080p_2':{bitrateMax:5000},
       '1080p60':{bitrateMax:8000}, '1440p30':{bitrateMax:10000}, '1440p60':{bitrateMax:16000}, '4k30':{bitrateMax:20000},
     },
+    ...(session.requests.token ? { agoraAccountLabel: '本地联调账号', remainingStandardMinutes: 1000,
+      estimatedRemainingSec: 600, rtcUsageRate: 100, budgetUpdatedAt: session.createdAt,
+      usageCalibratedAt: null, budgetEstimateStatus: 'local_estimate' } : {}),
   };
 }
 function readBody(req) {
@@ -81,6 +84,9 @@ const server = http.createServer(async (req,res) => {
     if (req.method==='GET' && url.pathname==='/test/session') { json(res,200,{token:session.token,channel:session.channel,quality:session.quality,requests:session.requests,...info()});return; }
     if (req.method==='GET' && url.pathname==='/api/share/info') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}session.requests.info++;json(res,200,info());return;
+    }
+    if (req.method==='GET' && url.pathname==='/api/share/preview') {
+      if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}session.requests.preview++;json(res,200,{appId});return;
     }
     if (req.method==='GET' && url.pathname==='/api/share/token') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}

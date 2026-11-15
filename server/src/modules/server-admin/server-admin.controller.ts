@@ -382,9 +382,7 @@ export class ServerAdminController {
   @Put('spaces/:platform/:externalId/agora-account-pool')
   setAgoraAccountPool(@Param() params: Record<string, string>, @Body('enabled') enabled: boolean) {
     const spaceId = this.accountSpace(params);
-    if (enabled !== false) throw new BadRequestException('自动轮转将在 P3 分配协议就绪后开放，当前仅可管理账号');
-    this.db.updateServer(spaceId, { agoraAccountPoolEnabled: 0 });
-    return { ok: true };
+    return this.usage.setPoolEnabled(spaceId, enabled);
   }
 
   @Post(['server/:serverId/presence', 'spaces/:platform/:externalId/presence'])

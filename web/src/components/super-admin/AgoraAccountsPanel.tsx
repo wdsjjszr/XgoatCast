@@ -11,7 +11,7 @@ const ESTIMATE: Record<string, string> = { baseline_required: '余量未知', lo
 const emptyForm = (): AgoraAccountWrite => ({ label: '', enabled: true, appId: '', appCertificate: '', customerId: '', customerSecret: '' });
 const hkInputTime = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 16);
 
-export default function AgoraAccountsPanel({ space }: { space?: AgoraAccountSpace } = {}) {
+export default function AgoraAccountsPanel({ space, poolEnabled = false, onPoolChange }: { space?: AgoraAccountSpace; poolEnabled?: boolean; onPoolChange?: (enabled: boolean) => void } = {}) {
   const [accounts, setAccounts] = useState<AgoraAccountInfo[]>([]);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
@@ -35,7 +35,7 @@ export default function AgoraAccountsPanel({ space }: { space?: AgoraAccountSpac
         <button disabled={busy} onClick={() => edit()} className="btn-brand inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm"><Plus size={17} />添加账号</button></div>
     </div>
     <p className="rounded-xl border border-white/10 p-4 text-sm text-muted">每个免费账号只配置一个实际使用的 RTC 项目，安全可用量预留 300 标准分钟。首次接入请录入控制台剩余量与对应时间。{space ? '新增备用账号不会改变当前单账号共享配置。' : '此处维护真实账号账本，不向任何空间自动开放使用权。'}</p>
-    {space && <p className="text-sm text-muted"><input type="checkbox" disabled checked={false} aria-label="自动轮转（尚未开放）" className="mr-2" />自动轮转尚未开放，待 P3 分配协议就绪；当前仍使用上方单账号配置。</p>}
+    {space && <div className="space-y-2"><label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={busy} checked={poolEnabled} onChange={e => { const enabled = e.target.checked; void run(async () => { await api.setAgoraAccountPool(space, enabled); onPoolChange?.(enabled); setMessage(enabled ? '自动轮转已启用，新会话开始时选择本空间安全余量最多的账号。' : '已恢复单账号模式，已绑定会话保持原账号。'); }); }} />启用本空间自动轮转</label><p className="text-sm text-muted">{poolEnabled ? '无可用账号时会明确拒绝开始，不回退单账号或其他空间。' : '关闭时沿用上方单账号配置。'} 已绑定会话不会换号；请配套使用支持账号池的新版 Windows 客户端。</p></div>}
     {message && <p role="status" className="rounded-lg border border-orange-400/30 bg-orange-400/5 p-3 text-sm break-words">{message}</p>}
     {loading ? <p className="text-sm text-muted">正在读取账号…</p> : !accounts.length && editing === null ? <div className="glass rounded-xl p-8"><h3 className="font-medium">先接入一个声网账号</h3><p className="mt-2 text-sm text-muted">准备 App ID、发布证书和 RESTful 凭证，保存时会只读验证项目。</p><button onClick={() => edit()} className="btn-brand mt-4 rounded-lg px-4 py-2 text-sm">添加账号</button></div> : null}
     {editing !== null && <form className="glass rounded-xl p-5 sm:p-6" onSubmit={e => { e.preventDefault(); void run(async () => {

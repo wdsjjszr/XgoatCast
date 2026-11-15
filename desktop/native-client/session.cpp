@@ -74,7 +74,7 @@ static Json requestJson(const std::string& origin,const std::wstring& path,const
   auto result=Json::parse(data);if(!result.is_object())throw std::runtime_error("服务器响应格式无效");return result;
 }
 Json request(const Launch& launch,const std::string& endpoint,const Json* body){
-  auto query="/api/share/"+endpoint+"?t="+launch.token+(endpoint=="token"?"&role=publisher":"");
+  auto query="/api/share/"+endpoint+"?t="+launch.token+(endpoint=="token"?"&role=publisher&uid=1":endpoint=="preview"?"&role=publisher":"");
   if(endpoint=="info"&&!launch.launchId.empty())query+="&role=publisher&desktopLaunchId="+launch.launchId+"&desktopClientId="+launch.clientId;
   return requestJson(launch.server,wide(query),body);
 }
@@ -325,9 +325,9 @@ struct Session::Impl : IRtcEngineEventHandler {
     if(wasClaimed&&notifyServer)try{Json body=Json::object();request(current,"stop",&body);}catch(...){}
     std::lock_guard<std::mutex> guard(errorLock);failure.clear();
   }
-  void init(){
+  void init(bool publishing=false){
     if(engine)return;
-    credentials=request(current,"token");ensure();
+    credentials=request(current,publishing?"token":"preview");ensure();
     appId=credentials.at("appId").get<std::string>();if(appId.empty())throw std::runtime_error("服务器尚未配置声网");
     engine=createAgoraRtcEngine();if(!engine)throw std::runtime_error("无法启动声网引擎");
     RtcEngineContext context;context.appId=appId.c_str();context.eventHandler=this;context.audioScenario=AUDIO_SCENARIO_GAME_STREAMING;
@@ -380,7 +380,17 @@ struct Session::Impl : IRtcEngineEventHandler {
     }
     list->release();{std::lock_guard<std::mutex> guard(lock);state.sources=std::move(result);}PostMessageW(notify,WM_STATE,0,0);
   }
-  Json info(){auto j=request(current,"info");ensure();if(j.value("status","")=="ended")throw std::runtime_error("共享会话已结束，请重新获取链接");if(!streaming&&j.value("status","")=="active")throw std::runtime_error("此会话正在共享，请先在网页停止当前共享");{std::lock_guard<std::mutex> guard(lock);state.viewers=j.value("viewerCount",0);state.idleSeconds=j.value("idleRemainingSec",-1);state.noViewerSeconds=j.value("noViewerRemainingSec",-1);state.observedAt=GetTickCount64();state.serverObservedAt=state.observedAt;state.allowLowLatency=j.value("allowLowLatency",false);state.allowPreference=j.value("allowQualityPreference",false);state.room=wide(j.value("sharerUsername",std::string("共享会话")));state.allowedQualities.clear();if(j.contains("allowedQualities")&&j["allowedQualities"].is_array())for(auto&value:j["allowedQualities"])if(value.is_string()&&qualities.count(value.get<std::string>()))state.allowedQualities.push_back(value.get<std::string>());}PostMessageW(notify,WM_STATE,0,0);return j;}
+  void readBudget(const Json& j){
+    auto label=j.value("agoraAccountLabel",std::string());
+    double seconds=j.contains("estimatedRemainingSec")&&j["estimatedRemainingSec"].is_number()?j["estimatedRemainingSec"].get<double>():-1;
+    bool known=j.contains("remainingStandardMinutes")&&j["remainingStandardMinutes"].is_number();
+    std::wstring text=label.empty()?L"":seconds>=0?L"按当前负载预计可用约 "+std::to_wstring(static_cast<unsigned long long>(seconds/60))+L" 分钟":known?L"暂无在线媒体记录":L"余量未知，请补充余额基准";
+    if(seconds>=0&&seconds<300)text+=L" · 额度即将耗尽";else if(seconds>=0&&seconds<900)text+=L" · 额度偏低";
+    auto status=j.value("budgetEstimateStatus",std::string());
+    std::lock_guard<std::mutex> guard(lock);state.agoraAccountLabel=wide(label);state.budgetText=std::move(text);state.estimatedRemainingSec=seconds;
+    state.budgetDetail=(status=="calibrated_estimate"?L"官方用量校准后的估算":status=="unknown_mode_estimate"?L"校准估算 · 部分模式未知":L"本地估算")+std::wstring(L" · 安全余量预留 300 标准分钟，服务端每 30 秒更新");
+  }
+  Json info(){auto j=request(current,"info");ensure();if(j.value("status","")=="ended")throw std::runtime_error("共享会话已结束，请重新获取链接");if(!streaming&&j.value("status","")=="active")throw std::runtime_error("此会话正在共享，请先在网页停止当前共享");readBudget(j);{std::lock_guard<std::mutex> guard(lock);state.viewers=j.value("viewerCount",0);state.idleSeconds=j.value("idleRemainingSec",-1);state.noViewerSeconds=j.value("noViewerRemainingSec",-1);state.observedAt=GetTickCount64();state.serverObservedAt=state.observedAt;state.allowLowLatency=j.value("allowLowLatency",false);state.allowPreference=j.value("allowQualityPreference",false);state.room=wide(j.value("sharerUsername",std::string("共享会话")));state.allowedQualities.clear();if(j.contains("allowedQualities")&&j["allowedQualities"].is_array())for(auto&value:j["allowedQualities"])if(value.is_string()&&qualities.count(value.get<std::string>()))state.allowedQualities.push_back(value.get<std::string>());}PostMessageW(notify,WM_STATE,0,0);return j;}
   void load(Launch l){
     if(streaming)return;
     halt(false);ensure();{std::lock_guard<std::mutex> guard(lock);state=Snapshot{};}current=std::move(l);update(Phase::Loading,L"正在连接共享页…");
@@ -393,7 +403,7 @@ struct Session::Impl : IRtcEngineEventHandler {
     if(j.contains("publisherClientId")&&!j["publisherClientId"].is_null()){auto owner=j["publisherClientId"].get<std::string>();if(!owner.empty()&&owner!=current.clientId)throw std::runtime_error("此会话正在其他客户端共享");}
     current.quality=settings.quality;
     if(!j.contains("allowedQualities")||std::find(j["allowedQualities"].begin(),j["allowedQualities"].end(),current.quality)==j["allowedQualities"].end())throw std::runtime_error("该画质未开放，请在客户端选择其他档位");
-    destroy();init();ensure();
+    destroy();init(true);ensure();
     current.lowLatency=j.value("status","")=="grace"?j.value("lowLatency",false):(settings.lowLatency&&j.value("allowLowLatency",false));
     current.detail=settings.detail&&j.value("allowQualityPreference",false);
     sdk(engine->setChannelProfile(current.lowLatency?CHANNEL_PROFILE_COMMUNICATION:CHANNEL_PROFILE_LIVE_BROADCASTING),"设置共享模式");
@@ -427,7 +437,7 @@ struct Session::Impl : IRtcEngineEventHandler {
     if(engine&&GetTickCount64()>=microphonePoll)refreshMicrophones();
     if(!streaming){if(!current.server.empty()&&snapshot().phase==Phase::Ready&&GetTickCount64()>=poll){poll=GetTickCount64()+2000;info();}return;}ensure();auto now=GetTickCount64();
     if(now>=poll){poll=now+2000;auto j=info();if(j.value("status","")!="active"||j.value("publisherClientId",std::string())!=current.clientId){halt(false);update(Phase::Ready,L"共享已从网页停止");return;}Json body{{"clientId",current.clientId}};if(!request(current,"heartbeat",&body).value("ok",false))throw std::runtime_error("服务器已停止共享");}
-    if(renew||now>=tokenAt){auto token=request(current,"token");ensure();if(token.value("appId","")!=appId||token.value("channel","")!=credentials.value("channel",""))throw std::runtime_error("共享配置已变更，请重新开始");sdk(engine->renewToken(token.at("token").get<std::string>().c_str()),"续期共享");renew=false;tokenAt=now+std::max(10,token.value("expireSec",3600)-60)*1000ULL;}
+    if(renew||now>=tokenAt){auto token=request(current,"token");ensure();if(token.value("appId","")!=appId||token.value("channel","")!=credentials.value("channel","")||token.value("uid",0u)!=credentials.value("uid",0u))throw std::runtime_error("共享配置已变更，请重新开始");sdk(engine->renewToken(token.at("token").get<std::string>().c_str()),"续期共享");renew=false;tokenAt=now+std::max(10,token.value("expireSec",3600)-60)*1000ULL;}
     if(now>=usageAt)reportRtc(joined);
   }
   void run(){CoInitializeEx(nullptr,COINIT_MULTITHREADED);while(!quit){std::function<void()> fn;{std::unique_lock<std::mutex> guard(queueLock);changed.wait_for(guard,std::chrono::milliseconds(100),[this]{return quit||!commands.empty();});if(quit)break;if(!commands.empty()){fn=std::move(commands.front());commands.pop_front();}}

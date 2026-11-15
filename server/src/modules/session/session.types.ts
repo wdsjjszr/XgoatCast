@@ -1,4 +1,5 @@
 import type { PlatformKey } from '../platform/platform.types';
+import type { AgoraBudget } from '../agora/agora-usage.service';
 
 export enum SessionStatus {
   PENDING = 'pending',
@@ -104,7 +105,7 @@ export function getVideoCoefficient(tier: string, lowLatency: boolean): number {
   return ULTRA_LOW_LATENCY_COEFFICIENTS[tier] ?? 2;
 }
 
-export interface SessionInfo {
+export interface SessionInfo extends Partial<AgoraBudget> {
   rtcStandardSeconds?: number | null;
   usageEstimateStatus?: string;
   id: string;

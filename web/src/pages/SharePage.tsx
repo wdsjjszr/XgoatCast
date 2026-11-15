@@ -9,6 +9,7 @@ import type { SessionInfo } from '../types';
 import { NoticeBanners } from '../components/notices/NoticeCenter';
 import { getClientEnvironment, markPageOpenOnce, sanitizeShareFailureReason } from '../lib/clientEnv';
 import { buildDesktopLaunch, CLIENT_RELEASE_PAGE } from '../lib/desktopLaunch';
+import AgoraBudgetNotice from '../components/AgoraBudgetNotice';
 
 // ===== Cookie 工具 =====
 const CID_KEY = 'xgoatcast_cid';
@@ -361,6 +362,7 @@ export default function SharePage() {
           </div>
         )}
 
+        {!socket.ended && <div className="mb-4"><AgoraBudgetNotice budget={socket.budgetUpdatedAt ? socket : info || {}} /></div>}
         <div className="grid lg:grid-cols-[minmax(0,1.55fr)_minmax(330px,.85fr)] gap-5 items-start">
         <div>
           <div className="relative w-full aspect-video rounded-xl bg-[#24292b] overflow-hidden flex items-center justify-center video-stage">

@@ -72,7 +72,8 @@ export class ShareController {
       throw new HttpException('invalid RTC uid for role', HttpStatus.BAD_REQUEST);
     }
     const serverId = req.session.spaceId || '';
-    const result = this.agora.generateToken(req.session.channel, uid, r, serverId);
+    const account = this.usage?.prepareToken(req.session.id, r === 'publisher');
+    const result = this.agora.generateToken(req.session.channel, uid, r, serverId, account);
     if (!result.appId) {
       this.logger.warn(`token endpoint: appId not configured for serverId=${serverId}`);
       throw new HttpException(
@@ -84,6 +85,12 @@ export class ShareController {
     return result;
   }
 
+  @Get('preview')
+  @UseGuards(ShareTokenGuard)
+  preview(@Req() req: any) {
+    return { appId: this.usage?.previewAppId(req.session.id) || '' };
+  }
+
   @Post('start')
   @UseGuards(ShareTokenGuard)
   start(
@@ -93,6 +100,9 @@ export class ShareController {
     @Body('lowLatency') lowLatency?: boolean,
   ) {
     const serverId = req.session.spaceId || '';
+    if (this.db.getServer(serverId)?.platform === 'heychat' && this.db.getServer(serverId)?.agoraAccountPoolEnabled && !req.session.agoraAccountId) {
+      throw new HttpException('请先获取发布凭证再开始共享', HttpStatus.CONFLICT);
+    }
     const allowedQualities = this.agora.getAllowedQualities(serverId);
     if (!quality || !allowedQualities.includes(quality)) {
       throw new HttpException(

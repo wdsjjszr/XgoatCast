@@ -57,6 +57,7 @@ export class SessionService implements OnModuleInit {
       this.db.updateSession(row.id, { viewerCount: 0 });
     }
     this.logger.log('SessionService initialized (SQLite backend)');
+    this.usage?.refreshBudgets();
   }
 
   /** Convert DB session to in-memory ShareSession format */
@@ -301,6 +302,7 @@ export class SessionService implements OnModuleInit {
 
     const stored = this.db.getSessionById(session.id);
     this.usage?.touch(session.id);
+    this.usage?.refreshBudgets();
     if (stored) {
       if (firstStart) this.analytics.recordShareStarted(stored);
       else this.analytics.recordShareMetrics(stored);
@@ -534,6 +536,7 @@ export class SessionService implements OnModuleInit {
   updateQuality(sessionId: string, quality: string): void {
     this.usage?.settle(sessionId);
     this.db.updateSession(sessionId, { quality });
+    this.usage?.refreshBudgets();
     this.recordCurrentShareMetrics(sessionId);
     this.logger.log(`session ${sessionId} quality set to ${quality}`);
   }
@@ -561,6 +564,7 @@ export class SessionService implements OnModuleInit {
       peakViewers,
       viewerDurationMs,
     });
+    this.usage?.refreshBudgets();
 
     const endedRecord = this.db.getSessionById(sessionId);
     if (endedRecord) this.analytics.recordShareEnded(endedRecord, endReason);
@@ -668,6 +672,7 @@ export class SessionService implements OnModuleInit {
       : undefined;
     return {
       rtcStandardSeconds: session.rtcStandardSeconds, usageEstimateStatus: session.usageEstimateStatus,
+      ...this.usage?.budget(session.id),
       id: session.id,
       platform: session.platform,
       channel: session.channel,

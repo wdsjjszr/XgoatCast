@@ -23,6 +23,7 @@ import { cn, copyToClipboard } from '../lib/utils';
 import type { SessionInfo } from '../types';
 import { NoticeBanners } from '../components/notices/NoticeCenter';
 import { getClientEnvironment, markPageOpenOnce } from '../lib/clientEnv';
+import AgoraBudgetNotice from '../components/AgoraBudgetNotice';
 
 export default function ViewPage() {
   const [params] = useSearchParams();
@@ -247,6 +248,7 @@ function ViewContent() {
         !isFullscreen && 'pt-16 pb-8 px-4'
       )}>
         {!isFullscreen && <div className="w-full max-w-6xl"><NoticeBanners /></div>}
+        {!isFullscreen && !socket.ended && <div className="w-full max-w-6xl mb-3"><AgoraBudgetNotice budget={socket.budgetUpdatedAt ? socket : info || {}} /></div>}
         <div
           ref={screenRef}
           onMouseMove={handleMouseMove}
@@ -310,6 +312,7 @@ function ViewContent() {
             </div>
           )}
 
+          {isFullscreen && !socket.ended && socket.estimatedRemainingSec != null && socket.estimatedRemainingSec < 900 && <div className="absolute top-3 left-3 right-3 z-10"><AgoraBudgetNotice budget={socket} /></div>}
           {/* 播放器控制条 - 右下角，类似标准浏览器播放器 */}
           {view.hasVideo && !socket.ended && (
             <div

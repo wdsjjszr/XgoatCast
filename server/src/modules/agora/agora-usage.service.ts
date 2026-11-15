@@ -1,8 +1,9 @@
-import { ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { DatabaseService, ServerSession } from '../database/database.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { AgoraAccount, AgoraAccountsService } from './agora-accounts.service';
+import { EventBusService } from '../events/events.service';
 import { addBuckets, agoraGet, AgoraApiError, calibrateUsage, calibrationRange, DAY_MS, hkDate, localUsage, MONTHLY_STANDARD_SECONDS, monthBounds, monthKey, parseOfficialUsage, qualityTier, SAFETY_STANDARD_SECONDS, segmentSeconds, standardSeconds, UsageBuckets, utcDate } from './agora-usage.math';
 
 interface RtcPresence {
@@ -15,28 +16,119 @@ interface DailyUsage {
   official_json: string | null; calibrated_standard_seconds: number | null; calibrated_at: number | null; unknown_mode: number;
 }
 
+export interface AgoraBudget {
+  agoraAccountLabel?: string;
+  remainingStandardMinutes: number | null;
+  estimatedRemainingSec: number | null;
+  rtcUsageRate: number;
+  budgetUpdatedAt: number;
+  usageCalibratedAt: number | null;
+  budgetEstimateStatus: string;
+}
+
 @Injectable()
 export class AgoraUsageService implements OnModuleInit {
   private readonly meters = new Map<string, Meter>();
   private readonly syncing = new Set<string>();
-  constructor(private readonly db: DatabaseService, private readonly accounts: AgoraAccountsService, private readonly analytics: AnalyticsService) {}
+  private readonly budgets = new Map<string, AgoraBudget>();
+  constructor(private readonly db: DatabaseService, private readonly accounts: AgoraAccountsService, private readonly analytics: AnalyticsService,
+    @Optional() private readonly bus?: EventBusService) {}
   private get sql() { return this.db.integrationDatabase; }
   onModuleInit() { void this.runDue(); }
   isSyncing(id: string) { return this.syncing.has(id); }
   attachExisting() { for (const row of this.db.getUnfinishedSessions()) if (row.startedAt) this.touch(row.id); }
   recordTokenIdentity(sessionId: string, appId: string) {
     const row = this.db.getSessionById(sessionId);
-    if (row && this.supported(row) && (row.status === 'pending' || !row.agoraAppId)) {
+    if (row && this.supported(row) && !row.agoraAppId && !row.agoraAccountId) {
       const account = this.accounts.forSpace(row.serverId).find(account => account.app_id === appId.toLowerCase());
       this.db.updateSession(sessionId, { agoraAppId: appId, agoraAccountId: account?.id || null });
     }
   }
   private supported(row: ServerSession) { return this.db.getServer(row.serverId)?.platform === 'heychat'; }
 
+  previewAppId(sessionId: string): string {
+    const row = this.db.getSessionById(sessionId), space = row && this.db.getServer(row.serverId);
+    if (!row || row.status === 'ended') throw new ConflictException('共享会话已结束');
+    if (space?.platform !== 'heychat' || !space.agoraAccountPoolEnabled) return space?.agoraAppId || '';
+    const account = this.accounts.forSpace(row.serverId).find(a => a.enabled && a.app_id && a.app_certificate);
+    if (!account) throw new ConflictException('本空间账号池没有可用于预览的账号，请联系空间管理员');
+    return account.app_id;
+  }
+
+  prepareToken(sessionId: string, publisher: boolean): AgoraAccount | undefined {
+    this.flush();
+    const account = this.sql.transaction(() => {
+      const row = this.db.getSessionById(sessionId);
+      if (!row || row.status === 'ended') throw new ConflictException('共享会话已结束');
+      if (!this.supported(row)) return;
+      if (row.agoraAccountId) return this.accounts.spaceAccount(row.serverId, row.agoraAccountId);
+      const space = this.db.getServer(row.serverId);
+      const accounts = this.accounts.forSpace(row.serverId);
+      if (space.agoraAccountPoolEnabled && !row.agoraAppId) {
+        if (!publisher) throw new ConflictException('请等待共享者开始共享后再连接');
+        const candidates = accounts.filter(a => a.enabled && a.app_certificate && a.customer_id && a.customer_secret && a.project_id)
+          .map(account => ({ account, safe: this.balance(account).safeRemainingStandardMinutes }))
+          .filter(a => a.safe != null && a.safe > 0)
+          .sort((a, b) => b.safe - a.safe || a.account.id.localeCompare(b.account.id));
+        const selected = candidates[0]?.account;
+        if (!selected) throw new ConflictException('本空间账号池无安全可用账号，请检查启用状态、凭证及余额基准');
+        this.db.updateSession(sessionId, { agoraAccountId: selected.id, agoraAppId: selected.app_id });
+        return selected;
+      }
+      const legacy = accounts.find(a => a.app_id === (row.agoraAppId || space.agoraAppId).toLowerCase());
+      if (legacy && publisher) this.db.updateSession(sessionId, { agoraAccountId: legacy.id, agoraAppId: legacy.app_id });
+      return legacy;
+    })();
+    this.refreshBudgets();
+    return account;
+  }
+
+  setPoolEnabled(spaceId: string, enabled: boolean) {
+    if (typeof enabled !== 'boolean') throw new BadRequestException('启用状态无效');
+    if (enabled) {
+      this.flush();
+      if (!this.accounts.forSpace(spaceId).some(a => a.enabled && a.app_certificate && a.customer_id && a.customer_secret && a.project_id && this.balance(a).safeRemainingStandardMinutes > 0)) {
+        throw new BadRequestException('请先添加并启用至少一个凭证完整且有安全余量的账号');
+      }
+    }
+    this.db.updateServer(spaceId, { agoraAccountPoolEnabled: enabled ? 1 : 0 });
+    return { ok: true };
+  }
+
+  budget(sessionId: string): AgoraBudget | undefined {
+    const row = this.db.getSessionById(sessionId);
+    if (!row?.agoraAccountId || !this.supported(row)) return;
+    const budget = this.budgets.get(row.agoraAccountId);
+    if (!budget) return;
+    return { ...budget, agoraAccountLabel: this.accounts.spaceAccount(row.serverId, row.agoraAccountId).label };
+  }
+
+  refreshBudgets(now = Date.now()) {
+    this.flush();
+    const rows = this.db.getUnfinishedSessions().filter(row => this.supported(row) && row.agoraAccountId);
+    const rates = new Map<string, number>();
+    for (const row of rows) {
+      const buckets: UsageBuckets = {};
+      for (const client of this.meters.get(row.id)?.clients.values() || []) {
+        if (!client.online || client.seenAt + 45_000 <= now) continue;
+        const key = client.role === 'publisher' ? 'audio/publisher' : `${client.video ? qualityTier(row.quality) : 'audio'}/${row.lowLatency ? 'rtc' : 'live'}`;
+        buckets[key] = (buckets[key] || 0) + 1;
+      }
+      rates.set(row.agoraAccountId, (rates.get(row.agoraAccountId) || 0) + standardSeconds(buckets));
+    }
+    this.budgets.clear();
+    for (const [id, rate] of rates) {
+      const balance = this.balance(this.accounts.get(id), now), remaining = balance.safeRemainingStandardMinutes;
+      this.budgets.set(id, { remainingStandardMinutes: remaining, estimatedRemainingSec: remaining == null || rate === 0 ? null : Math.floor(remaining * 60 / rate),
+        rtcUsageRate: rate, budgetUpdatedAt: now, usageCalibratedAt: balance.usageCalibratedAt, budgetEstimateStatus: balance.estimateStatus });
+    }
+    for (const row of rows) this.bus?.emitSessionStateChanged({ sessionId: row.id, status: row.status, viewerCount: row.viewerCount });
+  }
+
   touch(sessionId: string, now = Date.now()): Meter | undefined {
     const row = this.db.getSessionById(sessionId);
     if (!row || row.status === 'ended' || !this.supported(row)) return;
-    if (!row.agoraAccountId) {
+    if (!row.agoraAccountId && (!this.db.getServer(row.serverId)?.agoraAccountPoolEnabled || row.agoraAppId)) {
       const appId = row.agoraAppId || this.db.getServer(row.serverId)?.agoraAppId || '';
       const account = this.accounts.forSpace(row.serverId).find(account => account.app_id === appId.toLowerCase());
       if (account) this.db.updateSession(sessionId, { agoraAccountId: account.id, agoraAppId: appId });
@@ -102,10 +194,12 @@ export class AgoraUsageService implements OnModuleInit {
     this.settle(sessionId);
     meter.clients.set(body.clientId, { role: body.role, presenceId: body.presenceId, sequence: body.sequence, online: body.online, video: body.video, seenAt: Date.now() });
     if (row.usageEstimateStatus === 'awaiting_media_state') this.db.updateSession(sessionId, { usageEstimateStatus: 'local_estimate' });
+    if (!existing || existing.online !== body.online || existing.video !== body.video) this.refreshBudgets();
   }
   disconnect(sessionId: string, presenceId: string, role: 'publisher' | 'subscriber') {
     this.settle(sessionId);
     for (const client of this.meters.get(sessionId)?.clients.values() || []) if (client.role === role && client.presenceId === presenceId) client.online = false;
+    this.refreshBudgets();
   }
   finish(sessionId: string) { this.settle(sessionId); this.meters.delete(sessionId); }
 
@@ -117,6 +211,7 @@ export class AgoraUsageService implements OnModuleInit {
       this.settle(id);
       this.analytics.recordShareMetrics(this.db.getSessionById(id));
     }
+    this.refreshBudgets();
   }
   flush() { for (const id of this.meters.keys()) this.settle(id); }
 

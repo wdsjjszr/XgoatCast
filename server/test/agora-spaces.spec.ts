@@ -18,6 +18,8 @@ import { AnalyticsService } from '../src/modules/analytics/analytics.service';
 import { SessionService } from '../src/modules/session/session.service';
 import { EventBusService } from '../src/modules/events/events.service';
 import { ServerAdminController } from '../src/modules/server-admin/server-admin.controller';
+import { ShareController } from '../src/modules/share/share.controller';
+import { SessionSseController } from '../src/modules/session/session-sse.controller';
 import { DAY_MS, monthBounds, monthKey, utcDate } from '../src/modules/agora/agora-usage.math';
 
 Logger.overrideLogger(false);
@@ -39,15 +41,16 @@ function fixture() {
     for (let at = Date.parse(url.searchParams.get('from_date')!); at <= Date.parse(url.searchParams.get('to_date')!); at += DAY_MS) usages.push({ date: utcDate(at), usage: Object.fromEntries(fields.map(field => [field, 0])) });
     return new Response(JSON.stringify({ meta: Object.fromEntries(fields.map(field => [field, { unit: 'second' }])), usages }));
   }) as any;
-  const db = new DatabaseService(), analytics = new AnalyticsService(db), accounts = new AgoraAccountsService(db), usage = new AgoraUsageService(db, accounts, analytics);
-  const sessions = new SessionService(db, new AgoraService(db), new EventBusService(), analytics, usage);
+  const db = new DatabaseService(), analytics = new AnalyticsService(db), accounts = new AgoraAccountsService(db), bus = new EventBusService(), usage = new AgoraUsageService(db, accounts, analytics, bus);
+  const agora = new AgoraService(db), sessions = new SessionService(db, agora, bus, analytics, usage);
+  const share = new ShareController(agora, sessions, db, analytics, usage);
   const controller = new ServerAdminController(db, analytics, accounts, usage);
   const a = db.createSpace({ platform: 'heychat', externalId: 'a', displayName: '空间 A', ownerId: 'owner-a' });
   const b = db.createSpace({ platform: 'heychat', externalId: 'b', displayName: '空间 B', ownerId: 'owner-b' });
   for (const space of [a, b]) db.updateServer(space.serverId, { bound: 1, passwordHash: bcrypt.hashSync('test-password', 4) });
   const params = (space = a) => ({ platform: 'heychat', externalId: space.externalId });
   const create = (space = a) => sessions.createSession({ platform: 'heychat', spaceId: space.serverId, externalSpaceId: space.externalId, externalChannelId: 'channel', sharerUserId: 'owner', sharerUsername: '测试共享者' });
-  return { db, accounts, usage, sessions, controller, a, b, params, create, root, realFetch, apiFetch: global.fetch,
+  return { db, accounts, usage, sessions, share, bus, controller, a, b, params, create, root, realFetch, apiFetch: global.fetch,
     now: () => now, advance: (ms: number) => { now += ms; },
     baseline: () => ({ at: monthBounds(monthKey(now))[0], remainingStandardMinutes: 5000 }),
     close() { db.onModuleDestroy(); process.chdir(cwd); global.fetch = realFetch; Date.now = realNow; },
@@ -200,6 +203,7 @@ test('real HTTP auth rejects anonymous, foreign-space and forged account operati
   const f = fixture(); let child: ReturnType<typeof spawn> | undefined;
   try {
     const account = await f.controller.createAgoraAccount(f.params(), credentials());
+    const session = f.create();
     const tokenA = f.controller.login(f.params(), { password: 'test-password' }).token;
     const tokenB = f.controller.login(f.params(f.b), { password: 'test-password' }).token;
     const listener = createServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
@@ -231,8 +235,134 @@ test('real HTTP auth rejects anonymous, foreign-space and forged account operati
     assert.equal((await call('/api/spaces/heychat/a/agora-account-pool', tokenA, 'PUT', { enabled: true })).status, 400);
     assert.equal((await call('/api/spaces/heychat/a/config', tokenA, 'PUT', { agoraAccountPoolEnabled: 1, idleTimeoutSec: 120 })).status, 200);
     assert.equal((await (await call('/api/spaces/heychat/a/config', tokenA)).json()).agoraAccountPoolEnabled, false);
+    assert.equal((await call('/api/share/preview')).status, 401);
+    assert.equal((await call(path + '/' + account.id, tokenA, 'PUT', { ...credentials(), baseline: f.baseline() })).status, 200);
+    assert.equal((await call('/api/spaces/heychat/a/agora-account-pool', tokenA, 'PUT', { enabled: true })).status, 200);
+    const sharePath = '/api/share/';
+    assert.equal((await (await call(sharePath + 'preview?t=' + session.token)).json()).appId, credentials().appId);
+    assert.equal(f.db.getSessionById(session.id)!.agoraAccountId, null);
+    assert.equal((await call(sharePath + 'token?t=' + session.token + '&role=subscriber')).status, 409);
+    const published = await call(sharePath + 'token?t=' + session.token + '&role=publisher');
+    assert.equal(published.status, 200);
+    assert.equal((await published.json()).appId, credentials().appId);
+    assert.equal(f.db.getSessionById(session.id)!.agoraAccountId, account.id);
+    const viewed = await (await call(sharePath + 'token?t=' + session.token + '&role=subscriber&uid=456')).json();
+    assert.equal(viewed.appId, credentials().appId); assert.equal(viewed.uid, 456);
+    assert.equal((await (await call(sharePath + 'info?t=' + session.token)).json()).agoraAccountLabel, credentials().label);
   } finally {
     if (child && child.exitCode === null) { child.kill(); await once(child, 'exit'); }
     f.close();
   }
+});
+
+test('pool allocation stays in its space, starts after preview, and locks every token to one account', async () => {
+  const f = fixture();
+  try {
+    const first = await f.accounts.save(undefined, { ...credentials('a'), baseline: f.baseline() }, f.a.serverId);
+    const selected = await f.accounts.save(undefined, { ...credentials('c'), baseline: { ...f.baseline(), remainingStandardMinutes: 6000 } }, f.a.serverId);
+    await f.accounts.save(undefined, { ...credentials('d'), baseline: { ...f.baseline(), remainingStandardMinutes: 9999 } }, f.b.serverId);
+    f.controller.setAgoraAccountPool(f.params(), true);
+    const session = f.create(), req = () => ({ session: f.sessions.getById(session.id) });
+    assert.deepEqual(f.share.preview(req()), { appId: f.accounts.forSpace(f.a.serverId)[0].app_id });
+    assert.equal(f.db.getSessionById(session.id)!.agoraAccountId, null);
+    assert.equal(f.db.getSessionById(session.id)!.agoraAppId, '');
+    assert.throws(() => f.share.token(req(), 'subscriber'));
+    assert.throws(() => f.share.start(req(), '1080p_2', publisher));
+    const token = f.share.token(req(), 'publisher');
+    assert.equal(token.appId, selected.app_id); assert.equal(token.uid, 1); assert.ok(token.token);
+    assert.equal(f.db.getSessionById(session.id)!.agoraAccountId, selected.id);
+    assert.throws(() => f.accounts.updateLegacy(f.a.serverId, { agoraAppId: selected.app_id, agoraAppCertificate: 'f'.repeat(32) }));
+    f.db.integrationDatabase.prepare('UPDATE agora_space_accounts SET enabled=0 WHERE account_id=?').run(selected.id);
+    f.db.integrationDatabase.prepare('UPDATE agora_accounts SET baselines_json=? WHERE id=?').run(JSON.stringify({ [monthKey(f.now())]: { ...f.baseline(), remainingStandardMinutes: 0 } }), selected.id);
+    f.sessions.startSharing(session.token, publisher); f.sessions.stopSharing(session.token);
+    f.controller.setAgoraAccountPool(f.params(), false);
+    for (const role of ['publisher', 'subscriber']) {
+      const uid = role === 'publisher' ? '1' : '456';
+      const renewed = f.share.token(req(), role, uid);
+      assert.equal(renewed.appId, token.appId); assert.equal(renewed.channel, token.channel); assert.equal(renewed.uid, Number(uid));
+    }
+    f.sessions.startSharing(session.token, publisher);
+    assert.equal(f.db.getSessionById(session.id)!.agoraAccountId, selected.id);
+    f.sessions.endSession(session.id, 'manual');
+    f.controller.setAgoraAccountPool(f.params(), true);
+    const next = f.create(); assert.equal(f.share.token({ session: next }, 'publisher').appId, first.app_id);
+    assert.throws(() => f.share.token(req(), 'publisher'));
+  } finally { f.close(); }
+});
+
+test('allocation settles live usage before choosing and ties use stable account IDs', async () => {
+  const f = fixture();
+  try {
+    const a = await f.accounts.save(undefined, { ...credentials('a'), baseline: f.baseline() }, f.a.serverId);
+    const c = await f.accounts.save(undefined, { ...credentials('c'), baseline: f.baseline() }, f.a.serverId);
+    f.controller.setAgoraAccountPool(f.params(), true);
+    const sorted = [a, c].sort((a, b) => a.id.localeCompare(b.id));
+    const first = f.create(); f.share.token({ session: first }, 'publisher');
+    assert.equal(f.db.getSessionById(first.id)!.agoraAccountId, sorted[0].id);
+    f.usage.report(first.id, { clientId: publisher, presenceId: publisher, role: 'publisher', uid: 1, sequence: 1, online: true, video: false });
+    f.advance(30_000);
+    const next = f.create(); f.share.token({ session: next }, 'publisher');
+    assert.equal(f.db.getSessionById(next.id)!.agoraAccountId, sorted[1].id);
+    assert.equal(f.db.getSessionById(first.id)!.rtcStandardSeconds, 30);
+  } finally { f.close(); }
+});
+
+test('empty or ineligible enabled pools never fall back; disabled pools keep the legacy contract', async () => {
+  const f = fixture();
+  try {
+    f.accounts.updateLegacy(f.a.serverId, { agoraAppId: 'a'.repeat(32), agoraAppCertificate: 'b'.repeat(32) });
+    await f.accounts.save(undefined, { ...credentials('d'), baseline: f.baseline() }, f.b.serverId);
+    const pending = f.create();
+    assert.throws(() => f.controller.setAgoraAccountPool(f.params(), true));
+    assert.throws(() => f.controller.setAgoraAccountPool(f.params(), 'true' as any));
+    f.db.updateServer(f.a.serverId, { agoraAccountPoolEnabled: 1 });
+    assert.throws(() => f.share.token({ session: pending }, 'publisher'), /本空间账号池无安全可用账号/);
+    const ready = await f.accounts.save(undefined, { ...credentials('c'), baseline: { ...f.baseline(), remainingStandardMinutes: 300 } }, f.a.serverId);
+    assert.throws(() => f.share.token({ session: pending }, 'publisher'));
+    await f.accounts.save(ready.id, { ...credentials('c'), enabled: false, baseline: f.baseline() }, f.a.serverId);
+    assert.throws(() => f.share.token({ session: pending }, 'publisher'));
+    assert.equal(f.db.getSessionById(pending.id)!.agoraAccountId, null);
+    f.controller.setAgoraAccountPool(f.params(), false);
+    assert.equal(f.share.token({ session: pending }, 'publisher').appId, 'a'.repeat(32));
+    assert.equal(f.sessions.toInfo(f.sessions.getById(pending.id)!).remainingStandardMinutes, null);
+  } finally { f.close(); }
+});
+
+test('one cached budget uses actual video/audio load across authorized spaces and shares it via SSE and info', async () => {
+  const f = fixture();
+  try {
+    const account = await f.accounts.save(undefined, { ...credentials(), label: 'A 公开备注', baseline: f.baseline() }, f.a.serverId);
+    await f.accounts.save(undefined, { ...credentials(), label: 'B 公开备注' }, f.b.serverId);
+    for (const space of [f.a, f.b]) f.controller.setAgoraAccountPool(f.params(space), true);
+    const a = f.create(), b = f.create(f.b);
+    for (const s of [a, b]) { f.share.token({ session: s }, 'publisher'); f.sessions.startSharing(s.token, publisher); }
+    const report = (id: string, clientId: string, role: string, video: boolean, online = true, sequence = 1) => f.usage.report(id, { clientId, presenceId: publisher, role, uid: role === 'publisher' ? 1 : 456, video, online, sequence });
+    const videoId = '00000000-0000-4000-8000-000000000002', audioId = '00000000-0000-4000-8000-000000000003';
+    report(a.id, publisher, 'publisher', false); report(b.id, publisher, 'publisher', false);
+    report(a.id, videoId, 'subscriber', true); report(b.id, audioId, 'subscriber', false);
+    const before = f.usage.budget(a.id)!;
+    assert.equal(before.rtcUsageRate, 1 + 1 + 4.57 + 0.57);
+    assert.equal(before.estimatedRemainingSec, Math.floor(4700 * 60 / before.rtcUsageRate));
+    assert.equal(f.usage.budget(b.id)!.agoraAccountLabel, 'B 公开备注');
+    assert.equal(f.db.getSessionById(b.id)!.agoraAccountId, account.id);
+    const info = f.share.info({ session: f.sessions.getById(a.id) });
+    const sse = new SessionSseController(f.sessions, f.bus, {} as any) as any;
+    const state = sse.buildState(a.id);
+    for (const key of ['agoraAccountLabel', 'remainingStandardMinutes', 'estimatedRemainingSec', 'rtcUsageRate', 'budgetUpdatedAt', 'usageCalibratedAt', 'budgetEstimateStatus', 'usageEstimateStatus']) assert.equal(state[key], (info as any)[key]);
+    assert.equal(info.usageEstimateStatus, 'local_estimate');
+    assert.doesNotMatch(JSON.stringify(state), /secret-a|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|B 公开备注|owner-b/);
+    f.advance(10_000);
+    assert.equal(f.share.info({ session: f.sessions.getById(a.id) }).budgetUpdatedAt, before.budgetUpdatedAt);
+    report(a.id, videoId, 'subscriber', true, false, 2);
+    const fewer = f.usage.budget(a.id)!;
+    assert.equal(fewer.rtcUsageRate, 2.57); assert.ok(fewer.estimatedRemainingSec! > before.estimatedRemainingSec!);
+    assert.ok(fewer.remainingStandardMinutes! < before.remainingStandardMinutes!);
+    assert.equal(f.usage.budget(b.id)!.estimatedRemainingSec, fewer.estimatedRemainingSec);
+    f.advance(36_000); f.usage.checkpoint();
+    assert.equal(f.usage.budget(a.id)!.rtcUsageRate, 0); assert.equal(f.usage.budget(a.id)!.estimatedRemainingSec, null);
+    const restarted = new AgoraUsageService(f.db, f.accounts, new AnalyticsService(f.db)); restarted.refreshBudgets();
+    assert.equal(restarted.prepareToken(a.id, true)!.id, account.id);
+    assert.equal(restarted.budget(a.id)!.rtcUsageRate, 0);
+    assert.ok(restarted.budget(a.id)!.remainingStandardMinutes! <= fewer.remainingStandardMinutes!);
+  } finally { f.close(); }
 });

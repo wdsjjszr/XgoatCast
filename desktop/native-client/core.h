@@ -98,6 +98,8 @@ struct Snapshot {
   int viewers=0, idleSeconds=-1, noViewerSeconds=-1;
   ULONGLONG observedAt=0,serverObservedAt=0;
   std::wstring room;
+  std::wstring agoraAccountLabel, budgetText, budgetDetail;
+  double estimatedRemainingSec=-1;
   bool allowLowLatency=false, allowPreference=false;
   std::vector<std::string> allowedQualities;
   std::vector<Source> sources;
