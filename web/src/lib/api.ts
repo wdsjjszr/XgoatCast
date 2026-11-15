@@ -16,6 +16,7 @@ import type {
   ShareTelemetryPayload,
 } from '../types/analytics';
 import type { RtcDiagnosticPayload } from './rtcLifecycle';
+import type { AgoraAccountInfo, AgoraAccountWrite } from '../types/agora';
 
 const SUPER_TOKEN_KEY = 'xgoat_super_token';
 export type Platform = 'kook' | 'heychat' | 'qq' | 'discord';
@@ -262,6 +263,12 @@ export const api = {
   },
 
   // ===== Super Admin API =====
+  getAgoraAccounts(): Promise<AgoraAccountInfo[]> { return superRequest('/api/super/agora-accounts'); },
+  saveAgoraAccount(id: string | undefined, body: AgoraAccountWrite): Promise<AgoraAccountInfo> {
+    return superRequest('/api/super/agora-accounts' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+  },
+  syncAgoraAccount(id: string): Promise<AgoraAccountInfo> { return superRequest('/api/super/agora-accounts/' + encodeURIComponent(id) + '/sync', { method: 'POST', body: '{}' }); },
+  deleteAgoraAccount(id: string): Promise<{ ok: boolean }> { return superRequest('/api/super/agora-accounts/' + encodeURIComponent(id), { method: 'DELETE' }); },
   superLogin(password: string): Promise<{ ok: boolean; token?: string; message?: string }> {
     return superRequest('/api/super/login', {
       method: 'POST',

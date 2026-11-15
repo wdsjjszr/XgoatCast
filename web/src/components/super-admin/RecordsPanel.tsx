@@ -206,7 +206,7 @@ function ShareRecordsTable({ items }: { items: ShareAnalyticsRecord[] }) {
                 </td>
                 <td className="px-4 py-3 text-xs">
                   <p>{formatCount(item.viewerJoins)} 人次 · 峰值 {formatCount(item.peakViewers)}</p>
-                  <p className="mt-1 text-dim">估算观众时长 {formatDuration(item.viewerDurationMs)}</p>
+                  <p className="mt-1 text-dim">{item.viewerDurationEstimated ? '峰值估算观众时长' : '累计观众时长'} {formatDuration(item.viewerDurationMs)}</p>
                 </td>
                 <td className="px-4 py-3 text-xs">
                   <p>{item.quality || '-'}</p>

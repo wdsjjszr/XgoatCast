@@ -16,11 +16,15 @@ interface DiagnosticFields {
 }
 export interface RtcDiagnosticPayload extends DiagnosticFields {
   token: string;
-  eventType: 'rtc_diagnostic';
+  eventType: 'rtc_diagnostic' | 'rtc_state';
   event: RtcEvent;
   role: 'publisher' | 'subscriber';
   clientId: string;
   sdkVersion?: string;
+  presenceId: string;
+  sequence: number;
+  online: boolean;
+  video: boolean;
 }
 export type RtcLog = (event: RtcEvent, fields?: DiagnosticFields) => void;
 
@@ -37,13 +41,29 @@ export function rtcErrorCode(error: unknown): string {
   return ERROR_CODES.has(code) ? code! : 'RTC_ERROR';
 }
 
-export function createRtcLog(token: string, role: 'publisher' | 'subscriber', sdkVersion?: string): RtcLog {
+export function createRtcLog(token: string, role: 'publisher' | 'subscriber', sdkVersion?: string, publisherId?: string): RtcLog {
   const clientId = crypto.randomUUID();
-  return (event, fields = {}) => {
-    const diagnostic = { eventType: 'rtc_diagnostic' as const, event, role, clientId, sdkVersion, ...fields };
-    // Never log the authentication token or SDK error objects (which can embed RTC tokens).
-    console.info('[RTC]', diagnostic);
+  let presenceId = publisherId || clientId;
+  try { if (role === 'subscriber') presenceId = sessionStorage.getItem('xgoatcast_vid') || clientId; } catch {}
+  let sequence = 0, online = false, video = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let uid: number | undefined;
+  const report = (eventType: RtcDiagnosticPayload['eventType'], event: RtcEvent, fields: DiagnosticFields = {}) => {
+    const diagnostic = { eventType, event, role, clientId, sdkVersion, presenceId, sequence: ++sequence, online, video, uid, ...fields };
+    if (eventType === 'rtc_diagnostic') console.info('[RTC]', diagnostic);
     void api.reportShareTelemetry({ token, ...diagnostic }).catch(() => {});
+  };
+  return (event, fields = {}) => {
+    uid = fields.uid ?? uid;
+    if (['join_success', 'publish_success', 'subscribe_success'].includes(event)) online = true;
+    if (event === 'connection_change' && fields.state === 'CONNECTED') online = true;
+    if (event === 'connection_change' && fields.state === 'DISCONNECTED') online = false;
+    if (event === 'subscribe_success' && fields.mediaType === 'video') video = true;
+    if ((event === 'unsubscribe' && fields.mediaType === 'video') || event === 'remote_left') video = false;
+    if (event === 'rtc_leave') { online = false; video = false; clearInterval(heartbeat); heartbeat = undefined; }
+    if (online && !heartbeat) heartbeat = setInterval(() => report('rtc_state', 'connection_change'), 30_000);
+    // Log only selected state fields, never the authentication token or SDK error objects.
+    report('rtc_diagnostic', event, fields);
   };
 }
 

@@ -1,6 +1,8 @@
 export type SessionStatus = 'pending' | 'active' | 'grace' | 'ended';
 
 export interface SessionInfo {
+  rtcStandardSeconds?: number | null;
+  usageEstimateStatus?: string;
   id: string;
   platform?: 'kook' | 'heychat' | 'qq' | 'discord' | 'panel';
   channel: string;

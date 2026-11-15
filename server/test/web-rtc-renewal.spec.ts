@@ -38,6 +38,8 @@ function fixture() {
     console: { info: (...args: any[]) => consoleLogs.push(args) },
     setTimeout(fn: () => void, ms: number) { timers.set(++timerId, { fn, ms }); return timerId; },
     clearTimeout(id: number) { timers.delete(id); },
+    setInterval(fn: () => void, ms: number) { timers.set(++timerId, { fn, ms }); return timerId; },
+    clearInterval(id: number) { timers.delete(id); },
     require: () => ({ api, ApiError }),
   });
   const lifecycle = module.exports.installRtcTokenRenewal({
@@ -165,4 +167,17 @@ test('diagnostics exclude credentials and do not enter analytics counters', () =
   assert.equal(analytics, 0);
   controller.telemetry({ session: { id: 'session' } }, { eventType: 'page_open' });
   assert.equal(analytics, 1);
+});
+
+test('RTC state snapshots advance sequence, retain presence identity and stop heartbeats after leave', () => {
+  const f = fixture();
+  const log = f.exports.createRtcLog('private-token', 'publisher', '4.24.0', '00000000-0000-4000-8000-000000000001');
+  log('join_success', { uid: 1 });
+  const first = f.calls.at(-1)[1];
+  assert.equal(first.online, true); assert.equal(first.sequence, 1);
+  const heartbeat = [...f.timers.values()].find(timer => timer.ms === 30000)!;
+  heartbeat.fn(); const second = f.calls.at(-1)[1];
+  assert.equal(second.eventType, 'rtc_state'); assert.equal(second.presenceId, first.presenceId); assert.equal(second.sequence, 2);
+  assert.equal(f.consoleLogs.length, 1);
+  log('rtc_leave'); assert.equal(f.calls.at(-1)[1].online, false); assert.equal(f.timers.size, 0);
 });

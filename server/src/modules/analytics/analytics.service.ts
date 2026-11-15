@@ -20,6 +20,7 @@ import {
 } from './analytics.types';
 
 interface ShareRow {
+  usage_model: string;
   share_id: string;
   server_snowflake_id: string;
   server_name: string;
@@ -92,8 +93,8 @@ export class AnalyticsService {
     this.db.runAnalytics(`
       INSERT OR IGNORE INTO analytics_share_records (
         share_id, server_snowflake_id, server_name, created_at, attributed_at,
-        status, quality, low_latency, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        status, quality, low_latency, updated_at, usage_model
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
     `, [
       this.safeId(session.id),
       snapshot.serverSnowflakeId,
@@ -103,6 +104,7 @@ export class AnalyticsService {
       this.safeCode(session.quality, '1080p_2'),
       session.lowLatency ? 1 : 0,
       Date.now(),
+      session.rtcStandardSeconds != null ? 'segmented_estimate' : 'peak_estimate',
     ]);
   }
 
@@ -131,11 +133,10 @@ export class AnalyticsService {
     else this.recordShareCreated(session);
 
     const durationMs = this.getSessionDurationMs(session);
-    // Lightweight estimate: assume the peak audience watched for the full
-    // first-start-to-final-end duration. No per-viewer intervals are retained.
-    const viewerDurationEstimated = true;
-    const viewerDurationMs = this.nonNegativeInteger(session.peakViewers) * durationMs;
-    const calculatedStandardMinutes = standardMinutes == null
+    const segmented = session.rtcStandardSeconds != null;
+    const viewerDurationEstimated = !segmented || session.usageEstimateStatus !== 'local_estimate';
+    const viewerDurationMs = segmented ? session.viewerDurationMs || 0 : this.nonNegativeInteger(session.peakViewers) * durationMs;
+    const calculatedStandardMinutes = segmented ? session.rtcStandardSeconds / 60 : standardMinutes == null
       ? this.calculateStandardMinutes(
           durationMs,
           viewerDurationMs,
@@ -151,9 +152,9 @@ export class AnalyticsService {
           peak_viewers = MAX(peak_viewers, ?),
           viewer_duration_ms = MAX(viewer_duration_ms, ?),
           viewer_duration_estimated = ?,
-          standard_minutes = MAX(standard_minutes, ?),
+          standard_minutes = ${segmented ? '?' : 'MAX(standard_minutes, ?)'},
           standard_minutes_estimated = ?,
-          quality = ?, low_latency = ?, updated_at = ?
+          quality = ?, low_latency = ?, usage_model = ?, updated_at = ?
       WHERE share_id = ?
     `, [
       durationMs,
@@ -162,9 +163,10 @@ export class AnalyticsService {
       viewerDurationMs,
       viewerDurationEstimated ? 1 : 0,
       calculatedStandardMinutes,
-      standardMinutes == null ? 1 : 0,
+      segmented || standardMinutes == null ? 1 : 0,
       this.safeCode(session.quality, '1080p_2'),
       session.lowLatency ? 1 : 0,
+      segmented ? 'segmented_estimate' : 'peak_estimate',
       Date.now(),
       this.safeId(session.id),
     ]);
@@ -944,7 +946,7 @@ export class AnalyticsService {
             Number(row.duration_ms),
             Number(row.final_ended_at) - Number(row.first_started_at),
           );
-    const standardMinutes = row.final_ended_at == null
+    const standardMinutes = row.final_ended_at == null && row.usage_model !== 'segmented_estimate'
       ? this.calculateStandardMinutes(
           durationMs,
           Number(row.viewer_duration_ms),
@@ -978,6 +980,7 @@ export class AnalyticsService {
       viewerDurationEstimated: !!row.viewer_duration_estimated,
       standardMinutes,
       standardMinutesEstimated: !!row.standard_minutes_estimated,
+      usageModel: row.usage_model,
       quality: row.quality,
       lowLatency: !!row.low_latency,
       updatedAt: Number(row.updated_at),
@@ -1005,6 +1008,7 @@ export class AnalyticsService {
     const rows = this.db.getAnalyticsRows<ShareRow>(`
       SELECT * FROM analytics_share_records
       WHERE first_started_at IS NOT NULL
+        AND usage_model != 'segmented_estimate'
         AND duration_ms > 0
         AND standard_minutes <= 0
     `);

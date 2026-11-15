@@ -141,6 +141,11 @@ export interface ServerEvent {
 }
 
 export interface ServerSession {
+  agoraAccountId?: string | null;
+  agoraAppId?: string;
+  rtcStandardSeconds?: number | null;
+  usageCheckpointAt?: number | null;
+  usageEstimateStatus?: string;
   id: string;
   token: string;
   channel: string;
@@ -188,11 +193,12 @@ export class DatabaseService implements OnModuleDestroy {
       mkdirSync(dataDir, { recursive: true });
     }
     const dbPath = join(dataDir, 'xgoatcast.db');
+    const existed = existsSync(dbPath);
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');
-    this.migrate();
+    this.migrate(existed);
     this.logger.log(`SQLite database ready at ${dbPath}`);
   }
 
@@ -208,7 +214,13 @@ export class DatabaseService implements OnModuleDestroy {
     return this.db;
   }
 
-  private migrate() {
+  private migrate(existed = false) {
+    if (existed && this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'sessions'").get() &&
+        !(this.db.prepare('PRAGMA table_info(sessions)').all() as any[]).some(c => c.name === 'rtc_standard_seconds')) {
+      const backup = join(process.cwd(), 'data', `xgoatcast-pre-usage-${Date.now()}-${randomBytes(3).toString('hex')}.db`);
+      this.db.prepare('VACUUM INTO ?').run(backup);
+      this.logger.log('Saved pre-usage SQLite backup in data/');
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS panel_accounts (
         id TEXT PRIMARY KEY COLLATE NOCASE,
@@ -492,6 +504,24 @@ export class DatabaseService implements OnModuleDestroy {
 
     // Migrate sessions table: add low_latency column if missing
     const sessCols = this.db.prepare("PRAGMA table_info(sessions)").all() as any[];
+    for (const [name, type] of Object.entries({ agora_account_id: 'TEXT', agora_app_id: "TEXT NOT NULL DEFAULT ''", rtc_standard_seconds: 'REAL', usage_checkpoint_at: 'INTEGER', usage_estimate_status: "TEXT NOT NULL DEFAULT 'legacy_estimate'" })) {
+      if (!sessCols.some(c => c.name === name)) this.db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${type}`);
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agora_accounts (
+        id TEXT PRIMARY KEY, label TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+        app_id TEXT NOT NULL UNIQUE, app_certificate TEXT NOT NULL,
+        customer_id TEXT NOT NULL UNIQUE, customer_secret TEXT NOT NULL, project_id TEXT NOT NULL UNIQUE,
+        baselines_json TEXT NOT NULL DEFAULT '{}', sync_day TEXT NOT NULL DEFAULT '', sync_attempts INTEGER NOT NULL DEFAULT 0,
+        next_sync_at INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER, last_sync_at INTEGER,
+        sync_status TEXT NOT NULL DEFAULT 'not_synced', sync_error TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS agora_usage_daily (
+        account_id TEXT NOT NULL, utc_date TEXT NOT NULL, local_json TEXT NOT NULL DEFAULT '', local_standard_seconds REAL NOT NULL DEFAULT 0,
+        official_json TEXT, calibrated_standard_seconds REAL, calibrated_at INTEGER, unknown_mode INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(account_id, utc_date)
+      );
+    `);
     if (!sessCols.some(c => c.name === 'low_latency')) {
       this.db.exec(`ALTER TABLE sessions ADD COLUMN low_latency INTEGER NOT NULL DEFAULT 0`);
       this.logger.log('Added low_latency column to sessions table');
@@ -688,6 +718,7 @@ export class DatabaseService implements OnModuleDestroy {
       this.db.exec("ALTER TABLE analytics_share_records ADD COLUMN start_failure_reason TEXT NOT NULL DEFAULT ''");
     }
     const addedPeakViewers = !analyticsShareCols.some((column) => column.name === 'peak_viewers');
+    if (!analyticsShareCols.some(column => column.name === 'usage_model')) this.db.exec("ALTER TABLE analytics_share_records ADD COLUMN usage_model TEXT NOT NULL DEFAULT 'peak_estimate'");
     if (addedPeakViewers) {
       this.db.exec('ALTER TABLE analytics_share_records ADD COLUMN peak_viewers INTEGER NOT NULL DEFAULT 0');
     }
@@ -897,6 +928,9 @@ export class DatabaseService implements OnModuleDestroy {
   /** 将数据库行（下划线字段名）映射为 ServerSession（驼峰字段名） */
   private mapSessionRow(row: any): ServerSession {
     return {
+      agoraAccountId: row.agora_account_id ?? null, agoraAppId: row.agora_app_id || '',
+      rtcStandardSeconds: row.rtc_standard_seconds ?? null, usageCheckpointAt: row.usage_checkpoint_at ?? null,
+      usageEstimateStatus: row.usage_estimate_status || 'legacy_estimate',
       id: row.id,
       token: row.token,
       channel: row.channel,
@@ -1599,6 +1633,11 @@ export class DatabaseService implements OnModuleDestroy {
       session.lastViewerAt, session.publisherClientId,
       session.lowLatency ?? 0,
     );
+    this.updateSession(session.id, {
+      agoraAccountId: session.agoraAccountId ?? null, agoraAppId: session.agoraAppId || '',
+      rtcStandardSeconds: session.rtcStandardSeconds ?? null, usageCheckpointAt: session.usageCheckpointAt ?? null,
+      usageEstimateStatus: session.usageEstimateStatus || 'legacy_estimate',
+    });
   }
 
   private readonly ALLOWED_SESSION_COLS = new Set([
@@ -1608,6 +1647,7 @@ export class DatabaseService implements OnModuleDestroy {
     'created_at', 'started_at', 'ended_at', 'duration_ms', 'last_heartbeat',
     'grace_started_at', 'grace_reason', 'last_viewer_at', 'publisher_client_id',
     'low_latency',
+    'agora_account_id', 'agora_app_id', 'rtc_standard_seconds', 'usage_checkpoint_at', 'usage_estimate_status',
   ]);
 
   updateSession(id: string, fields: Partial<ServerSession>): void {

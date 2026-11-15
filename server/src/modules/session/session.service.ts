@@ -1,4 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { AgoraUsageService } from '../agora/agora-usage.service';
 import { Interval } from '@nestjs/schedule';
 import { randomBytes, randomUUID } from 'crypto';
 import { DatabaseService, ServerSession } from '../database/database.service';
@@ -34,6 +35,7 @@ export class SessionService implements OnModuleInit {
     private readonly agora: AgoraService,
     private readonly bus: EventBusService,
     private readonly analytics: AnalyticsService,
+    @Optional() private readonly usage?: AgoraUsageService,
   ) {
     this.db.integrationDatabase.exec(`
       CREATE TABLE IF NOT EXISTS session_recovery (session_id TEXT PRIMARY KEY, until_at INTEGER NOT NULL DEFAULT 0, empty_since INTEGER);
@@ -61,6 +63,8 @@ export class SessionService implements OnModuleInit {
   private fromDb(row: ServerSession): ShareSession {
     const space = row.serverId ? this.db.getServer(row.serverId) : undefined;
     return {
+      agoraAccountId: row.agoraAccountId, agoraAppId: row.agoraAppId, rtcStandardSeconds: row.rtcStandardSeconds,
+      usageCheckpointAt: row.usageCheckpointAt, usageEstimateStatus: row.usageEstimateStatus,
       id: row.id,
       token: row.token,
       channel: row.channel,
@@ -93,6 +97,8 @@ export class SessionService implements OnModuleInit {
 
   private toDb(session: ShareSession): ServerSession {
     return {
+      agoraAccountId: session.agoraAccountId, agoraAppId: session.agoraAppId, rtcStandardSeconds: session.rtcStandardSeconds,
+      usageCheckpointAt: session.usageCheckpointAt, usageEstimateStatus: session.usageEstimateStatus,
       id: session.id,
       token: session.token,
       channel: session.channel,
@@ -155,6 +161,8 @@ export class SessionService implements OnModuleInit {
     const agoraAppId = serverConfig?.agoraAppId || '';
 
     const session: ShareSession = {
+      rtcStandardSeconds: params.platform === 'heychat' ? 0 : null,
+      usageEstimateStatus: params.platform === 'heychat' ? 'awaiting_media_state' : 'legacy_estimate',
       id,
       token,
       channel: this.agora.generateChannelName(shortId),
@@ -255,6 +263,7 @@ export class SessionService implements OnModuleInit {
       );
       return undefined;
     }
+    this.usage?.settle(session.id);
     if (!session.publisherClientId && clientId) {
       session.publisherClientId = clientId;
     }
@@ -291,6 +300,7 @@ export class SessionService implements OnModuleInit {
     }
 
     const stored = this.db.getSessionById(session.id);
+    this.usage?.touch(session.id);
     if (stored) {
       if (firstStart) this.analytics.recordShareStarted(stored);
       else this.analytics.recordShareMetrics(stored);
@@ -336,6 +346,7 @@ export class SessionService implements OnModuleInit {
       session.status === SessionStatus.GRACE &&
       session.graceReason === 'heartbeat'
     ) {
+      this.usage?.settle(session.id);
       session.status = SessionStatus.ACTIVE;
       session.graceStartedAt = null;
       session.graceReason = null;
@@ -372,6 +383,7 @@ export class SessionService implements OnModuleInit {
   stopSharing(token: string): ShareSession | undefined {
     const session = this.getByToken(token);
     if (!session || session.status === SessionStatus.ENDED) return undefined;
+    this.usage?.settle(session.id);
     const now = Date.now();
     session.status = SessionStatus.GRACE;
     session.graceReason = 'stopped';
@@ -432,6 +444,7 @@ export class SessionService implements OnModuleInit {
     if (!viewers || !presence) return;
     presence.connections -= 1;
     if (presence.connections <= 0) {
+      this.usage?.disconnect(sessionId, viewerId, 'subscriber');
       viewers.delete(viewerId);
     }
     if (viewers.size === 0) this.viewerPresenceMap.delete(sessionId);
@@ -442,6 +455,7 @@ export class SessionService implements OnModuleInit {
   }
 
   private syncViewerMetrics(session: ShareSession, viewerCount: number, joinedViewerId?: string): void {
+    this.usage?.settle(session.id);
     // 更新峰值
     if (viewerCount > session.peakViewers) {
       session.peakViewers = viewerCount;
@@ -518,12 +532,14 @@ export class SessionService implements OnModuleInit {
   }
 
   updateQuality(sessionId: string, quality: string): void {
+    this.usage?.settle(sessionId);
     this.db.updateSession(sessionId, { quality });
     this.recordCurrentShareMetrics(sessionId);
     this.logger.log(`session ${sessionId} quality set to ${quality}`);
   }
 
   endSession(sessionId: string, reason: string): void {
+    this.usage?.finish(sessionId);
     const session = this.getById(sessionId);
     if (!session || session.status === SessionStatus.ENDED) return;
 
@@ -535,7 +551,7 @@ export class SessionService implements OnModuleInit {
     // 持久化峰值和累计加入数（从内存 Map 取，不再实时写 DB）
     const totalJoins = this.joinCountMap.get(sessionId) ?? session.totalViewerJoins;
     const peakViewers = session.peakViewers;
-    const viewerDurationMs = peakViewers * Math.max(0, durationMs || 0);
+    const viewerDurationMs = session.rtcStandardSeconds != null ? session.viewerDurationMs : peakViewers * Math.max(0, durationMs || 0);
 
     this.db.updateSession(sessionId, {
       status: SessionStatus.ENDED,
@@ -581,6 +597,9 @@ export class SessionService implements OnModuleInit {
   }
 
   toInfo(session: ShareSession): SessionInfo {
+    if (session.rtcStandardSeconds != null) {
+      session = this.getById(session.id) || session;
+    }
     // 计算实时时长
     let durationMs = session.durationMs;
     if (session.startedAt && session.status !== SessionStatus.ENDED) {
@@ -598,12 +617,12 @@ export class SessionService implements OnModuleInit {
 
     // 观众：订阅视频流，按 lowLatency 模式选择互动直播或极速直播视频系数
     const viewerVideoCoeff = getVideoCoefficient(qi.tier, session.lowLatency);
-    const viewerDurationMs = session.peakViewers * Math.max(0, durationMs || 0);
+    const viewerDurationMs = session.rtcStandardSeconds != null ? session.viewerDurationMs || 0 : session.peakViewers * Math.max(0, durationMs || 0);
     const viewerDurationSec = viewerDurationMs / 1000;
     const viewerStandardSec = viewerDurationSec * viewerVideoCoeff;
 
     // 标准时长（分钟），向上取整
-    const standardMinutes = durationMs
+    const standardMinutes = session.rtcStandardSeconds != null ? session.rtcStandardSeconds / 60 : durationMs
       ? Math.ceil((broadcasterStandardSec + viewerStandardSec) / 60)
       : 0;
 
@@ -612,7 +631,7 @@ export class SessionService implements OnModuleInit {
 
     const durationMin = durationSec / 60;
     const modeLabel = session.lowLatency ? '互动直播' : '极速直播';
-    const billingDetail = durationMs
+    const billingDetail = session.rtcStandardSeconds != null ? `[分段估算] RTC 累计 ${session.rtcStandardSeconds.toFixed(1)} 标准秒 = ${standardMinutes.toFixed(2)} 标准分钟` : durationMs
       ? `[峰值估算] ${durationMin.toFixed(1)}主播分×系数${broadcasterAudioCoeff} + ${session.peakViewers}峰值观众×${durationMin.toFixed(1)}分×${modeLabel}系数${viewerVideoCoeff} = ${standardMinutes} 标准分钟`
       : '-';
 
@@ -648,6 +667,7 @@ export class SessionService implements OnModuleInit {
       ? this.db.integrationDatabase.prepare('SELECT view_token FROM panel_rooms WHERE session_id = ?').get(session.id) as { view_token: string } | undefined
       : undefined;
     return {
+      rtcStandardSeconds: session.rtcStandardSeconds, usageEstimateStatus: session.usageEstimateStatus,
       id: session.id,
       platform: session.platform,
       channel: session.channel,
@@ -739,6 +759,7 @@ export class SessionService implements OnModuleInit {
           ?? session.lastHeartbeat;
         const elapsed = now - latestHeartbeat;
         if (elapsed > cfg.heartbeatIntervalSec * 1000 * 3) {
+          this.usage?.settle(session.id);
           this.db.updateSession(session.id, {
             status: SessionStatus.GRACE,
             graceReason: 'heartbeat',

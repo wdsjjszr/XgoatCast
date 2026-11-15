@@ -70,7 +70,7 @@ export const QUALITY_OPTIONS: QualityOption[] = [
   },
 ];
 
-export function useScreenShare(token: string, onTrackEnded?: () => void) {
+export function useScreenShare(token: string, onTrackEnded?: () => void, publisherId?: string) {
   const publishingRef = useRef(false);
   const clientRef = useRef<IAgoraRTCClient | null>(null);
   const screenVideoRef = useRef<ILocalVideoTrack | null>(null);
@@ -120,7 +120,7 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
       const operation = ++operationRef.current;
       let client: IAgoraRTCClient | null = null;
       let stage: 'join' | 'publish' = 'join';
-      const log = createRtcLog(token, 'publisher', (window as any).AgoraRTC?.VERSION);
+      const log = createRtcLog(token, 'publisher', (window as any).AgoraRTC?.VERSION, publisherId);
       logRef.current = log;
       const check = () => { if (operationRef.current !== operation) throw new Error('RTC operation cancelled'); };
       setError('');
@@ -287,7 +287,7 @@ export function useScreenShare(token: string, onTrackEnded?: () => void) {
         publishingRef.current = false;
       }
     },
-    [token],
+    [token, publisherId],
   );
 
   const setMicrophoneEnabled = useCallback(async (enabled: boolean): Promise<boolean> => {

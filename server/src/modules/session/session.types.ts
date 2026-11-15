@@ -11,6 +11,11 @@ export enum SessionStatus {
 export type GraceReason = 'heartbeat' | 'stopped' | null;
 
 export interface ShareSession {
+  agoraAccountId?: string | null;
+  agoraAppId?: string;
+  rtcStandardSeconds?: number | null;
+  usageCheckpointAt?: number | null;
+  usageEstimateStatus?: string;
   id: string;
   token: string;
   channel: string;
@@ -100,6 +105,8 @@ export function getVideoCoefficient(tier: string, lowLatency: boolean): number {
 }
 
 export interface SessionInfo {
+  rtcStandardSeconds?: number | null;
+  usageEstimateStatus?: string;
   id: string;
   platform: PlatformKey;
   channel: string;

@@ -294,6 +294,7 @@ struct Session::Impl : IRtcEngineEventHandler {
   HWND notify;std::mutex lock,queueLock,errorLock;std::condition_variable changed;Snapshot state;Microphones microphones;std::string microphoneDevice;ULONGLONG microphonePoll=0;
   std::deque<std::function<void()>> commands;std::thread worker;std::atomic<bool> quit{false},cancel{false},joined{false},renew{false};
   std::string failure;Launch current;Json credentials;IRtcEngine* engine=nullptr;agora::media::IMediaEngine* media=nullptr;track_id_t track=0xffffffff;
+  std::string rtcClientId;unsigned long long usageSequence=0;ULONGLONG usageAt=0;bool usageOnline=false;
   Audio audio;ScreenPreview screenPreview;bool claimed=false,streaming=false;ULONGLONG poll=0,tokenAt=0;std::string appId;
   explicit Impl(HWND h):notify(h){worker=std::thread([this]{run();});}
   ~Impl(){cancel=true;quit=true;changed.notify_all();if(worker.joinable())worker.join();}
@@ -312,8 +313,15 @@ struct Session::Impl : IRtcEngineEventHandler {
   }
   void onConnectionStateChanged(CONNECTION_STATE_TYPE status,CONNECTION_CHANGED_REASON_TYPE) override{if(status==CONNECTION_STATE_FAILED)fail("声网连接已断开");}
   void destroy(){screenPreview.enable(false);audio.stop();if(engine){if(media)media->registerVideoFrameObserver(nullptr);engine->stopScreenCapture();engine->leaveChannel();if(media&&track!=0xffffffff)media->destroyCustomAudioTrack(track);if(media){media->release();media=nullptr;}engine->release();engine=nullptr;}track=0xffffffff;joined=false;appId.clear();}
+  void reportRtc(bool online){
+    if(rtcClientId.empty())return;
+    Json body{{"eventType","rtc_state"},{"role","publisher"},{"clientId",rtcClientId},{"presenceId",current.clientId},{"uid",1},{"sequence",++usageSequence},{"online",online},{"video",false}};
+    try{request(current,"telemetry",&body);}catch(...){/* A missed report is bounded by the server lease. */}
+    usageOnline=online;usageAt=GetTickCount64()+30000;
+  }
   void halt(bool notifyServer=true){
     bool wasClaimed=claimed;claimed=false;streaming=false;destroy();
+    if(usageOnline)reportRtc(false);
     if(wasClaimed&&notifyServer)try{Json body=Json::object();request(current,"stop",&body);}catch(...){}
     std::lock_guard<std::mutex> guard(errorLock);failure.clear();
   }
@@ -407,6 +415,7 @@ struct Session::Impl : IRtcEngineEventHandler {
     if(windowsBuild()>=20348){AudioTrackConfig config;config.enableLocalPlayback=false;track=media->createCustomAudioTrack(AUDIO_TRACK_MIXABLE,config);if(track==0xffffffff)throw std::runtime_error("无法创建软件声音轨道");options.publishCustomAudioTrackId=track;}
     joined=false;sdk(engine->joinChannel(credentials.at("token").get<std::string>().c_str(),credentials.at("channel").get<std::string>().c_str(),credentials.at("uid").get<unsigned>(),options),"加入共享");
     auto deadline=GetTickCount64()+15000;while(!joined){ensure();if(GetTickCount64()>deadline)throw std::runtime_error("共享连接超时");Sleep(20);}ensure();
+    GUID usageId{};check(CoCreateGuid(&usageId),"创建用量标识");wchar_t usageText[40]{};StringFromGUID2(usageId,usageText,40);rtcClientId=utf8(std::wstring(usageText+1,36));usageSequence=0;reportRtc(true);
     audio.include(settings.included);
     if(windowsBuild()>=20348)audio.start({},[this](const short* pcm){agora::media::IAudioFrameObserverBase::AudioFrame frame;frame.type=agora::media::IAudioFrameObserverBase::FRAME_TYPE_PCM16;frame.samplesPerChannel=480;frame.bytesPerSample=agora::rtc::TWO_BYTES_PER_SAMPLE;frame.channels=2;frame.samplesPerSec=48000;frame.buffer=const_cast<short*>(pcm);frame.renderTimeMs=engine->getCurrentMonotonicTimeInMs();if(media->pushAudioFrame(&frame,track)<0)fail("发送软件声音失败");},[this](auto message){fail(message);});
     ensure();Json body{{"quality",current.quality},{"clientId",current.clientId},{"lowLatency",current.lowLatency}};
@@ -419,6 +428,7 @@ struct Session::Impl : IRtcEngineEventHandler {
     if(!streaming){if(!current.server.empty()&&snapshot().phase==Phase::Ready&&GetTickCount64()>=poll){poll=GetTickCount64()+2000;info();}return;}ensure();auto now=GetTickCount64();
     if(now>=poll){poll=now+2000;auto j=info();if(j.value("status","")!="active"||j.value("publisherClientId",std::string())!=current.clientId){halt(false);update(Phase::Ready,L"共享已从网页停止");return;}Json body{{"clientId",current.clientId}};if(!request(current,"heartbeat",&body).value("ok",false))throw std::runtime_error("服务器已停止共享");}
     if(renew||now>=tokenAt){auto token=request(current,"token");ensure();if(token.value("appId","")!=appId||token.value("channel","")!=credentials.value("channel",""))throw std::runtime_error("共享配置已变更，请重新开始");sdk(engine->renewToken(token.at("token").get<std::string>().c_str()),"续期共享");renew=false;tokenAt=now+std::max(10,token.value("expireSec",3600)-60)*1000ULL;}
+    if(now>=usageAt)reportRtc(joined);
   }
   void run(){CoInitializeEx(nullptr,COINIT_MULTITHREADED);while(!quit){std::function<void()> fn;{std::unique_lock<std::mutex> guard(queueLock);changed.wait_for(guard,std::chrono::milliseconds(100),[this]{return quit||!commands.empty();});if(quit)break;if(!commands.empty()){fn=std::move(commands.front());commands.pop_front();}}
       try{if(fn)fn();tick();}catch(const std::exception&e){halt();update(cancel?Phase::Ready:Phase::Failed,wide(e.what()));}}

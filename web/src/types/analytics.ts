@@ -90,6 +90,8 @@ export interface AnalyticsOverview {
 }
 
 export interface ShareAnalyticsRecord {
+  viewerDurationEstimated?: boolean;
+  usageModel?: string;
   id: string;
   platform?: string;
   serverSnowflakeId: string;

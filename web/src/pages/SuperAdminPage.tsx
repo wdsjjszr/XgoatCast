@@ -25,8 +25,9 @@ import DashboardPanel, { type DashboardRecordTarget } from '../components/super-
 import RecordsPanel from '../components/super-admin/RecordsPanel';
 import { PlatformBadge } from '../components/super-admin/PlatformBadge';
 import { QqSettingsPanel } from '../components/super-admin/QqSettingsPanel';
+import AgoraAccountsPanel from '../components/super-admin/AgoraAccountsPanel';
 
-type Tab = 'dashboard' | 'records' | 'config' | 'spaces' | 'notices' | 'panels';
+type Tab = 'dashboard' | 'records' | 'config' | 'spaces' | 'notices' | 'panels' | 'agora';
 type ServerDetailTab = 'events' | 'sessions';
 type SpaceTarget = { platform: Platform; externalId: string };
 
@@ -34,6 +35,7 @@ const TABS: { id: Tab; label: string; icon: typeof Settings }[] = [
   { id: 'dashboard', label: '数据看板', icon: LayoutDashboard },
   { id: 'records', label: '统计记录', icon: ListChecks },
   { id: 'config', label: '全局配置', icon: Settings },
+  { id: 'agora', label: '声网账号', icon: ShieldCheck },
   { id: 'panels', label: '自建面板', icon: Server },
   { id: 'spaces', label: '平台空间', icon: Server },
   { id: 'notices', label: '通知管理', icon: Bell },
@@ -152,6 +154,7 @@ export default function SuperAdminPage() {
           <ServerDetailPanel space={selectedSpace} onBack={handleBackToList} />
         )}
         {tab === 'panels' && <PanelsPanel />}
+        {tab === 'agora' && <AgoraAccountsPanel />}
         {tab === 'notices' && <NoticeManagementPanel />}
       </main>
     </div>

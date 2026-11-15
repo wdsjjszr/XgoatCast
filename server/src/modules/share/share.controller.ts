@@ -9,6 +9,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { ShareTokenGuard } from '../auth/guards/share-token.guard';
 import { AgoraService } from '../agora/agora.service';
@@ -17,6 +18,7 @@ import { AgoraRole } from '../agora/agora.types';
 import { DatabaseService } from '../database/database.service';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { rtcDiagnostic } from './rtc-diagnostic';
+import { AgoraUsageService } from '../agora/agora-usage.service';
 
 @Controller('api/share')
 export class ShareController {
@@ -28,6 +30,7 @@ export class ShareController {
     private readonly sessionService: SessionService,
     private readonly db: DatabaseService,
     private readonly analytics: AnalyticsService,
+    @Optional() private readonly usage?: AgoraUsageService,
   ) {}
 
   @Get('info')
@@ -77,6 +80,7 @@ export class ShareController {
         HttpStatus.BAD_REQUEST,
       );
     }
+    if (r === 'publisher') this.usage?.recordTokenIdentity(req.session.id, result.appId);
     return result;
   }
 
@@ -131,12 +135,17 @@ export class ShareController {
   @Post('telemetry')
   @UseGuards(ShareTokenGuard)
   telemetry(@Req() req: any, @Body() body: any) {
+    if (body?.eventType === 'rtc_state') {
+      if (!req.panelViewer || body.role === 'subscriber') this.usage?.report(req.session.id, body);
+      return { ok: true };
+    }
     if (body?.eventType === 'rtc_diagnostic') {
       const diagnostic = rtcDiagnostic(req.session.id, body);
       if (!diagnostic || (req.panelViewer && diagnostic.role === 'publisher')) {
         throw new HttpException('invalid RTC diagnostic', HttpStatus.BAD_REQUEST);
       }
       this.logger.log(JSON.stringify(diagnostic));
+      this.usage?.report(req.session.id, body);
       return { ok: true };
     }
     this.analytics.recordClientTelemetry(req.session, {

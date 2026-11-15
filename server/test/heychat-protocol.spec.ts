@@ -218,7 +218,7 @@ test('cards support a link button, a server callback, and updating the original 
     sharerUsername: 'tester',
     totalViewerJoins: 3,
     durationMs: 65_000,
-    standardMinutes: 2,
+    standardMinutes: 2.123456,
     estimatedCost: 0.12,
   });
 
@@ -231,6 +231,7 @@ test('cards support a link button, a server callback, and updating the original 
   });
   assert.equal(ended.data[0].modules[3].btns[0].event, 'server');
   assert.equal(ended.data[0].modules[3].btns[0].value, 'reshare');
+  assert.match(JSON.stringify(ended), /标准时长：2\.12 分钟/);
 });
 
 function commandEvent(sequence: string | number, overrides: Record<string, unknown> = {}) {

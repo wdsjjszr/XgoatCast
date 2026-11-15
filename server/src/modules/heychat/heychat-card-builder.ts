@@ -77,7 +77,7 @@ export function buildHeychatEndedCard(options: {
     section(plain(
       `观看总人数：${options.totalViewerJoins} 人\n` +
       `共享时长：${duration}\n` +
-      `标准时长：${options.standardMinutes} 分钟\n` +
+      `标准时长：${options.standardMinutes.toFixed(2)} 分钟\n` +
       `预估费用：¥${options.estimatedCost.toFixed(2)}`,
     )),
     { type: 'button-group', btns: [serverButton('重新发起共享', 'reshare')] },

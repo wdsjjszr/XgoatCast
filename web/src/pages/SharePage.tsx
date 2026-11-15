@@ -99,7 +99,7 @@ export default function SharePage() {
   const screenShare = useScreenShare(token, () => {
     setMicrophoneEnabled(false);
     socket.stopSharing();
-  });
+  }, clientId);
   const stopRef = useRef(screenShare.stop);
   stopRef.current = screenShare.stop;
 

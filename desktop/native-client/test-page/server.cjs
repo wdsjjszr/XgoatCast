@@ -98,6 +98,10 @@ const server = http.createServer(async (req,res) => {
       if(session.status==='active'&&session.publisherClientId!==body.clientId){json(res,200,{ok:false,message:'已有客户端共享'});return;}
       session.status='active';session.publisherClientId=body.clientId;session.lowLatency=!!body.lowLatency;session.quality=body.quality;session.heartbeatAt=Date.now();session.requests.start++;json(res,200,{ok:true});return;
     }
+    if (req.method==='POST' && url.pathname==='/api/share/telemetry') {
+      if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}
+      await readBody(req);json(res,200,{ok:true});return;
+    }
     if (req.method==='POST' && url.pathname==='/api/share/heartbeat') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}const body=await readBody(req);
       const ok=session.status==='active'&&body.clientId===session.publisherClientId;if(ok)session.heartbeatAt=Date.now();json(res,200,{ok});return;
