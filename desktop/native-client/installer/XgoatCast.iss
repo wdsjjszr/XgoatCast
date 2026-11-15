@@ -3,7 +3,7 @@
   #define MyAppVersion "0.0.1"
 #endif
 #ifndef MyAppFullVersion
-  #define MyAppFullVersion "0.0.1-beta.1"
+  #define MyAppFullVersion "0.0.1-beta.2"
 #endif
 #define MyAppPublisher "XgoatCast"
 #define MyAppExeName "XgoatCast.exe"

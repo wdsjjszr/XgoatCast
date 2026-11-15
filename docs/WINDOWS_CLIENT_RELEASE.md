@@ -1,10 +1,18 @@
 # Windows 客户端发布与更新
 
-当前构建版本为 `0.0.1-beta.1`，后续只发布 Windows x64 安装包。下载入口统一为 `https://cast.xgoat.top/downloads.html`。安装程序放在雨云对象存储，网站只提供发布页与版本清单，用户下载不经过网站服务器。
+当前自用构建版本为 `0.0.1-beta.2`，只构建 Windows x64 安装包。[更新说明](releases/0.0.1-beta.2.md)列出配套功能和验收状态。
+
+## GitHub 在线编译
+
+仓库的 **Actions → Build Windows client → Run workflow** 可手动构建；推送 `main` 上的原生客户端或工作流改动也会自动构建。Fork 仓库首次使用时若 Actions 页面提示禁用，需要先启用工作流。
+
+工作流使用 Windows Server 2022、MSVC x64、Node.js 22 和 Inno Setup 6，复用现有依赖校验、编译、原生 UI/协议/策略/启动自检和打包脚本，无需配置服务端凭证。成功后在该次运行的 **Artifacts** 下载 `XgoatCast-windows-x64-<运行序号>`，解压得到安装包、`SHA256SUMS.txt` 和 `BUILD_INFO.txt`。`XgoatCast-ui-checks-<运行序号>` 提供 UI 图片和自检报告，产物保留 30 天。
+
+在线流程生成安装包供下载；更新网站下载清单使用下述独立发版流程。
 
 ## 自动完成整套发版
 
-`npm run release:all` 顺序完成原生构建、界面回归、服务端与上传测试、安装包打包、对象存储上传及网站部署，任一步失败即停止。仓库没有 GitHub Actions 自动发布任务；该命令使用发布机已有的 MSVC、Inno Setup、S3 私密配置与 SSH 登录，不把密钥写入仓库。
+`npm run release:all` 顺序完成原生构建、界面回归、服务端与上传测试、安装包打包、对象存储上传及网站部署，任一步失败即停止。该命令使用发布机已有的 MSVC、Inno Setup、S3 私密配置与 SSH 登录，不把密钥写入仓库。原有官网下载入口为 `https://cast.xgoat.top/downloads.html`，安装包放在雨云对象存储。
 
 WSL 使用：
 

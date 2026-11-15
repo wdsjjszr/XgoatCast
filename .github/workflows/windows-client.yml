@@ -1,0 +1,68 @@
+name: Build Windows client
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - desktop/native-client/**
+      - .github/workflows/windows-client.yml
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop/native-client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Fetch verified native dependencies
+        run: node fetch-deps.cjs
+      - name: Build native client with MSVC x64
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $visualStudio = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$visualStudio) { throw 'MSVC x64 toolchain not found' }
+          node build.cjs "--toolchain=$visualStudio\VC\Auxiliary\Build\vcvars64.bat"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check native UI, protocol, policy and startup
+        run: node test-ui.cjs out/XgoatCast-win-x64/XgoatCast.exe out/ui-checks
+      - name: Build installer
+        run: node build-installer.cjs
+      - name: Record source and installer checksum
+        run: |
+          $installers = @(Get-ChildItem out/*-win-x64-setup.exe)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer' }
+          $installer = $installers[0]
+          $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content out/SHA256SUMS.txt -Encoding utf8
+          @("Repository: $env:GITHUB_REPOSITORY", "Commit: $env:GITHUB_SHA", "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID") | Set-Content out/BUILD_INFO.txt -Encoding utf8
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: XgoatCast-windows-x64-${{ github.run_number }}
+          path: |
+            desktop/native-client/out/*-win-x64-setup.exe
+            desktop/native-client/out/SHA256SUMS.txt
+            desktop/native-client/out/BUILD_INFO.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload UI check reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: XgoatCast-ui-checks-${{ github.run_number }}
+          path: desktop/native-client/out/ui-checks/
+          if-no-files-found: ignore
+          retention-days: 30

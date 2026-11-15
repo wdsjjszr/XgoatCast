@@ -6,7 +6,11 @@ node_modules
 .env.native-test
 .env.lanzou
 .env.release
+.env.*
+!.env.example
+!.env.*.example
 .release-state/
+/.deployment/
 
 # Database files (contains sensitive credentials)
 data/*.db
@@ -21,6 +25,7 @@ dist/
 memory.md
 CONTEXT.md
 plans/
+/docs/DEPLOY_XC.md
 
 # IDE
 .vscode/
