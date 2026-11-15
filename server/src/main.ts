@@ -108,23 +108,25 @@ async function bootstrap() {
   // Public exceptions: login/status/bind for a specific platform space.
   app.use((req: any, res: any, next: any) => {
     const path = req.path;
-    if (path.startsWith('/api/panels/') || path.startsWith('/api/share/')) res.setHeader('Cache-Control', 'no-store');
+    const route = path.toLowerCase();
+    if (route.startsWith('/api/panels/') || route.startsWith('/api/share/')) res.setHeader('Cache-Control', 'no-store');
 
     let needsAuth = false;
-    if (path.startsWith('/api/super')) {
-      needsAuth = path !== '/api/super/login';
+    if (route.startsWith('/api/super')) {
+      needsAuth = route !== '/api/super/login';
     }
-    if (path.startsWith('/api/server')) {
-      needsAuth = !/\/(login|status|bind)$/.test(path);
+    if (route.startsWith('/api/server')) {
+      needsAuth = !/\/(login|status|bind)$/.test(route);
     }
-    if (path.startsWith('/api/spaces')) {
+    if (route.startsWith('/api/spaces')) {
       const publicDeviceBinding =
-        /^\/api\/spaces\/heychat\/[^/]+\/binding\/[^/]+\/(status|claim|poll|bind)$/.test(path) ||
-        /^\/api\/spaces\/qq\/[^/]+\/binding\/[^/]+\/(status|claim|poll|bind)$/.test(path);
-      needsAuth = !publicDeviceBinding && !/\/(login|status|bind)$/.test(path);
+        /^\/api\/spaces\/heychat\/[^/]+\/binding\/[^/]+\/(status|claim|poll|bind)$/.test(route) ||
+        /^\/api\/spaces\/qq\/[^/]+\/binding\/[^/]+\/(status|claim|poll|bind)$/.test(route);
+      needsAuth = !publicDeviceBinding && !/\/(login|status|bind)$/.test(route);
     }
 
     if (!needsAuth) return next();
+    res.setHeader('Cache-Control', 'no-store');
 
     const authHeader: string = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
@@ -176,12 +178,12 @@ async function bootstrap() {
 
     // Cross-role check: super_admin token only for /api/super, server_admin token must match serverId
     if (payload.role === 'super_admin') {
-      if (!path.startsWith('/api/super')) {
+      if (!route.startsWith('/api/super')) {
         return res.status(403).json({ message: '无权访问' });
       }
     } else if (payload.role === 'server_admin') {
-      const legacyMatch = path.match(/^\/api\/server\/([^/]+)/);
-      const spaceMatch = path.match(/^\/api\/spaces\/([^/]+)\/([^/]+)/);
+      const legacyMatch = path.match(/^\/api\/server\/([^/]+)/i);
+      const spaceMatch = path.match(/^\/api\/spaces\/([^/]+)\/([^/]+)/i);
       const legacyAllowed = legacyMatch && payload.serverId === legacyMatch[1];
       const space = spaceMatch ? db.getSpace(spaceMatch[1], spaceMatch[2]) : undefined;
       const canonicalAllowed = !!space && payload.serverId === space.serverId;
@@ -189,8 +191,8 @@ async function bootstrap() {
         return res.status(403).json({ message: '无权访问此服务器' });
       }
     } else if (payload.role === 'space_admin') {
-      const legacyMatch = path.match(/^\/api\/server\/([^/]+)/);
-      const spaceMatch = path.match(/^\/api\/spaces\/([^/]+)\/([^/]+)/);
+      const legacyMatch = path.match(/^\/api\/server\/([^/]+)/i);
+      const spaceMatch = path.match(/^\/api\/spaces\/([^/]+)\/([^/]+)/i);
       const legacyAllowed =
         payload.platform === 'kook' &&
         legacyMatch &&

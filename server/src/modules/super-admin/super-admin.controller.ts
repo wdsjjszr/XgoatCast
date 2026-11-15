@@ -10,7 +10,9 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
+import { AgoraAccountsService } from '../agora/agora-accounts.service';
 import { DatabaseService } from '../database/database.service';
 import * as bcrypt from 'bcryptjs';
 import { createHmac } from 'crypto';
@@ -50,6 +52,7 @@ export class SuperAdminController {
   constructor(
     private readonly db: DatabaseService,
     private readonly analytics: AnalyticsService,
+    @Optional() private readonly accounts?: AgoraAccountsService,
   ) {
     const pwd = process.env.SUPER_ADMIN_PASSWORD!;
     this.superPasswordHash = bcrypt.hashSync(pwd, 10);
@@ -347,7 +350,8 @@ export class SuperAdminController {
     }
     if (dto.allowLowLatency !== undefined) updates.allowLowLatency = dto.allowLowLatency;
 
-    this.db.updateServer(id, updates);
+    if (this.accounts) this.accounts.updateLegacy(id, updates);
+    else this.db.updateServer(id, updates);
     const current = this.getNonPanelServer(id);
     if (current) this.recordAvailabilityTransitions(s, current);
     return { ok: true };

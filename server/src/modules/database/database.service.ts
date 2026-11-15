@@ -42,6 +42,7 @@ export interface ServerRecord {
   agoraAppId: string;
   agoraAppCertificate: string;
   agoraTokenExpireSec: number;
+  agoraAccountPoolEnabled?: number;
   allowedQualities: string; // JSON array
   triggerWords: string;
   idleTimeoutSec: number;
@@ -318,6 +319,9 @@ export class DatabaseService implements OnModuleDestroy {
       this.db.exec(`ALTER TABLE servers ADD COLUMN allow_low_latency INTEGER NOT NULL DEFAULT 0`);
       this.logger.log('Added allow_low_latency column to servers table');
     }
+    if (!columns.some(c => c.name === 'agora_account_pool_enabled')) {
+      this.db.exec('ALTER TABLE servers ADD COLUMN agora_account_pool_enabled INTEGER NOT NULL DEFAULT 0');
+    }
     if (!columns.some(c => c.name === 'platform')) {
       this.db.exec(`ALTER TABLE servers ADD COLUMN platform TEXT NOT NULL DEFAULT 'kook'`);
       this.logger.log('Added platform column to servers table');
@@ -511,7 +515,7 @@ export class DatabaseService implements OnModuleDestroy {
       CREATE TABLE IF NOT EXISTS agora_accounts (
         id TEXT PRIMARY KEY, label TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
         app_id TEXT NOT NULL UNIQUE, app_certificate TEXT NOT NULL,
-        customer_id TEXT NOT NULL UNIQUE, customer_secret TEXT NOT NULL, project_id TEXT NOT NULL UNIQUE,
+        customer_id TEXT UNIQUE, customer_secret TEXT NOT NULL DEFAULT '', project_id TEXT UNIQUE,
         baselines_json TEXT NOT NULL DEFAULT '{}', sync_day TEXT NOT NULL DEFAULT '', sync_attempts INTEGER NOT NULL DEFAULT 0,
         next_sync_at INTEGER NOT NULL DEFAULT 0, last_attempt_at INTEGER, last_sync_at INTEGER,
         sync_status TEXT NOT NULL DEFAULT 'not_synced', sync_error TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL
@@ -522,6 +526,21 @@ export class DatabaseService implements OnModuleDestroy {
         PRIMARY KEY(account_id, utc_date)
       );
     `);
+    if ((this.db.prepare('PRAGMA table_info(agora_accounts)').all() as any[]).find(c => c.name === 'customer_id')?.notnull) {
+      this.db.transaction(() => {
+        const schema = (this.db.prepare("SELECT sql FROM sqlite_master WHERE name='agora_accounts'").get() as any).sql
+          .replace('agora_accounts', 'agora_accounts_nullable')
+          .replace('customer_id TEXT NOT NULL', 'customer_id TEXT').replace('project_id TEXT NOT NULL', 'project_id TEXT');
+        this.db.exec(schema);
+        this.db.exec('INSERT INTO agora_accounts_nullable SELECT * FROM agora_accounts; DROP TABLE agora_accounts; ALTER TABLE agora_accounts_nullable RENAME TO agora_accounts;');
+      })();
+    }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS agora_space_accounts (
+      space_id TEXT NOT NULL REFERENCES servers(server_id) ON DELETE CASCADE,
+      account_id TEXT NOT NULL REFERENCES agora_accounts(id),
+      label TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY(space_id,account_id)
+    );`);
     if (!sessCols.some(c => c.name === 'low_latency')) {
       this.db.exec(`ALTER TABLE sessions ADD COLUMN low_latency INTEGER NOT NULL DEFAULT 0`);
       this.logger.log('Added low_latency column to sessions table');
@@ -976,6 +995,7 @@ export class DatabaseService implements OnModuleDestroy {
       agoraAppId: row.agora_app_id,
       agoraAppCertificate: row.agora_app_certificate,
       agoraTokenExpireSec: row.agora_token_expire_sec,
+      agoraAccountPoolEnabled: row.agora_account_pool_enabled ?? 0,
       allowedQualities: row.allowed_qualities,
       triggerWords: row.trigger_words,
       idleTimeoutSec: row.idle_timeout_sec,
@@ -1096,7 +1116,7 @@ export class DatabaseService implements OnModuleDestroy {
   private readonly ALLOWED_SERVER_COLS = new Set([
     'owner_id', 'owner_username', 'guild_name', 'open_id',
     'password_hash', 'bound', 'status',
-    'agora_app_id', 'agora_app_certificate', 'agora_token_expire_sec',
+    'agora_app_id', 'agora_app_certificate', 'agora_token_expire_sec', 'agora_account_pool_enabled',
     'allowed_qualities', 'trigger_words',
     'idle_timeout_sec', 'heartbeat_interval_sec', 'no_viewer_timeout_sec',
     'public_domain', 'allow_low_latency', 'allow_quality_preference',

@@ -201,6 +201,12 @@ function spaceApiBase(platform: Platform, externalId: string): string {
   return `/api/spaces/${encodeURIComponent(platform)}/${encodeURIComponent(externalId)}`;
 }
 
+export interface AgoraAccountSpace { platform: Platform; externalId: string; }
+function agoraAccountsRequest<T>(suffix: string, options: RequestInit, space?: AgoraAccountSpace): Promise<T> {
+  const url = (space ? spaceApiBase(space.platform, space.externalId) : '/api/super') + '/agora-accounts' + suffix;
+  return space ? spaceRequest<T>(space.platform, space.externalId, url, options) : superRequest<T>(url, options);
+}
+
 function analyticsRangeParams(query: AnalyticsRangeQuery): URLSearchParams {
   const params = new URLSearchParams({ range: query.range });
   if (query.range === 'custom') {
@@ -263,12 +269,12 @@ export const api = {
   },
 
   // ===== Super Admin API =====
-  getAgoraAccounts(): Promise<AgoraAccountInfo[]> { return superRequest('/api/super/agora-accounts'); },
-  saveAgoraAccount(id: string | undefined, body: AgoraAccountWrite): Promise<AgoraAccountInfo> {
-    return superRequest('/api/super/agora-accounts' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+  getAgoraAccounts(space?: AgoraAccountSpace): Promise<AgoraAccountInfo[]> { return agoraAccountsRequest('', {}, space); },
+  saveAgoraAccount(id: string | undefined, body: AgoraAccountWrite, space?: AgoraAccountSpace): Promise<AgoraAccountInfo> {
+    return agoraAccountsRequest(id ? '/' + encodeURIComponent(id) : '', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) }, space);
   },
-  syncAgoraAccount(id: string): Promise<AgoraAccountInfo> { return superRequest('/api/super/agora-accounts/' + encodeURIComponent(id) + '/sync', { method: 'POST', body: '{}' }); },
-  deleteAgoraAccount(id: string): Promise<{ ok: boolean }> { return superRequest('/api/super/agora-accounts/' + encodeURIComponent(id), { method: 'DELETE' }); },
+  syncAgoraAccount(id: string, space?: AgoraAccountSpace): Promise<AgoraAccountInfo> { return agoraAccountsRequest('/' + encodeURIComponent(id) + '/sync', { method: 'POST', body: '{}' }, space); },
+  deleteAgoraAccount(id: string, space?: AgoraAccountSpace): Promise<{ ok: boolean }> { return agoraAccountsRequest('/' + encodeURIComponent(id), { method: 'DELETE' }, space); },
   superLogin(password: string): Promise<{ ok: boolean; token?: string; message?: string }> {
     return superRequest('/api/super/login', {
       method: 'POST',

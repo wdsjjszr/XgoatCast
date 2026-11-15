@@ -12,6 +12,7 @@ import { cn } from '../lib/utils';
 import { QUALITY_OPTIONS } from '../hooks/useScreenShare';
 import { NoticeBanners, NoticeProvider } from '../components/notices/NoticeCenter';
 import { getClientEnvironment, getTemporaryAdminBrowserSessionId } from '../lib/clientEnv';
+import AgoraAccountsPanel from '../components/super-admin/AgoraAccountsPanel';
 
 type Tab = 'config' | 'sessions';
 
@@ -540,6 +541,7 @@ function ServerLoginForm({ platform, serverId, onSuccess }: { platform: Platform
 
 function ServerConfigPanel({ platform, serverId }: { platform: Platform; serverId: string }) {
   const [config, setConfig] = useState<any>(null);
+  const [accountsRevision, setAccountsRevision] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
@@ -565,6 +567,7 @@ function ServerConfigPanel({ platform, serverId }: { platform: Platform; serverI
     setError('');
     try {
       await api.updateSpaceConfig(platform, serverId, config);
+      setAccountsRevision(value => value + 1);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e: any) {
@@ -582,18 +585,19 @@ function ServerConfigPanel({ platform, serverId }: { platform: Platform; serverI
         <p className="text-xs text-dim -mt-1">
           支持 agora.io 国际站和 shengwang.cn 声网国内站的账户，系统会自动匹配，无论是哪个站点的账户，均不会影响屏幕共享的速率和清晰度。
         </p>
-        <Field
+        {!config.agoraAccountPoolEnabled && <Field
           label="App ID"
           value={config.agoraAppId}
           onChange={(v) => update(['agoraAppId'], v)}
           placeholder="如 8a3c..."
-        />
-        <Field
+        />}
+        {!config.agoraAccountPoolEnabled && <Field
           label="App Certificate"
           value={config.agoraAppCertificate}
           onChange={(v) => update(['agoraAppCertificate'], v)}
           placeholder="已配置则显示 ******"
-        />
+        />}
+        {platform === 'heychat' && <p className="text-sm text-muted">当前单账号无需 RESTful 凭证即可共享。若此账号在其他授权使用处复用，修改凭证会同步影响它们；备用账号请在下方账号池添加。</p>}
         <div>
           <label className="text-xs text-muted mb-2 block">允许的画质</label>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -731,6 +735,7 @@ function ServerConfigPanel({ platform, serverId }: { platform: Platform; serverI
       >
         {saving ? '保存中...' : saved ? '已保存' : '保存配置'}
       </button>
+      {platform === 'heychat' && <div className="border-t border-white/10 pt-6"><AgoraAccountsPanel key={accountsRevision} space={{ platform, externalId: serverId }} /></div>}
     </div>
   );
 }

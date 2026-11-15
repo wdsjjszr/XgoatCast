@@ -11,7 +11,12 @@ import {
   HttpStatus,
   Req,
   Res,
+  Delete,
+  Optional,
+  ConflictException,
 } from '@nestjs/common';
+import { AgoraAccountsService } from '../agora/agora-accounts.service';
+import { AgoraUsageService } from '../agora/agora-usage.service';
 import type { Request, Response } from 'express';
 import { DatabaseService } from '../database/database.service';
 import * as bcrypt from 'bcryptjs';
@@ -36,6 +41,8 @@ export class ServerAdminController {
   constructor(
     private readonly db: DatabaseService,
     private readonly analytics: AnalyticsService,
+    @Optional() private readonly accounts?: AgoraAccountsService,
+    @Optional() private readonly usage?: AgoraUsageService,
   ) {}
 
   private resolveSpace(params: Record<string, string>) {
@@ -287,6 +294,7 @@ export class ServerAdminController {
       guildName: server.guildName,
       agoraAppId: server.agoraAppId,
       agoraAppCertificate: server.agoraAppCertificate ? '******' : '',
+      agoraAccountPoolEnabled: !!server.agoraAccountPoolEnabled,
       allowedQualities: sanitizeAllowedQualities(safeParse(server.allowedQualities)),
       triggerWordLabels: this.db.getGlobalConfig().triggerWordLabels,
       enabledTriggerWords: server.triggerWords.split(',').map(word => word.trim()).filter(Boolean),
@@ -324,9 +332,58 @@ export class ServerAdminController {
     if (dto.allowQualityPreference !== undefined) updates.allowQualityPreference = dto.allowQualityPreference;
     if (dto.allowLowLatency !== undefined) updates.allowLowLatency = dto.allowLowLatency;
 
-    this.db.updateServer(server.serverId, updates);
+    if (this.accounts) this.accounts.updateLegacy(server.serverId, updates);
+    else this.db.updateServer(server.serverId, updates);
     const current = this.db.getServer(server.serverId);
     if (current) this.recordAvailabilityTransitions(server, current);
+    return { ok: true };
+  }
+
+  private accountSpace(params: Record<string, string>) {
+    const { server } = this.resolveSpace(params);
+    if (!server || server.platform !== 'heychat' || !server.bound || server.status !== 'active') throw new BadRequestException('当前空间不可管理声网账号');
+    return server.serverId;
+  }
+
+  @Get('spaces/:platform/:externalId/agora-accounts')
+  listAgoraAccounts(@Param() params: Record<string, string>) {
+    return this.usage.list(this.accountSpace(params));
+  }
+
+  @Post('spaces/:platform/:externalId/agora-accounts')
+  createAgoraAccount(@Param() params: Record<string, string>, @Body() body: any) {
+    return this.saveAgoraAccount(params, undefined, body);
+  }
+
+  @Put('spaces/:platform/:externalId/agora-accounts/:id')
+  async saveAgoraAccount(@Param() params: Record<string, string>, @Param('id') id: string | undefined, @Body() body: any) {
+    const spaceId = this.accountSpace(params);
+    if (id) this.accounts.spaceAccount(spaceId, id);
+    if (id && this.usage.isSyncing(id)) throw new ConflictException('校准中，请稍后保存');
+    this.usage.flush();
+    const account = await this.accounts.save(id, body, spaceId);
+    this.usage.attachExisting();
+    return this.usage.list(spaceId).find(a => a.id === account.id);
+  }
+
+  @Delete('spaces/:platform/:externalId/agora-accounts/:id')
+  unlinkAgoraAccount(@Param() params: Record<string, string>, @Param('id') id: string) {
+    return this.accounts.unlink(this.accountSpace(params), id);
+  }
+
+  @Post('spaces/:platform/:externalId/agora-accounts/:id/sync')
+  async syncAgoraAccount(@Param() params: Record<string, string>, @Param('id') id: string) {
+    const spaceId = this.accountSpace(params);
+    this.accounts.spaceAccount(spaceId, id);
+    await this.usage.sync(id);
+    return this.usage.list(spaceId).find(a => a.id === id);
+  }
+
+  @Put('spaces/:platform/:externalId/agora-account-pool')
+  setAgoraAccountPool(@Param() params: Record<string, string>, @Body('enabled') enabled: boolean) {
+    const spaceId = this.accountSpace(params);
+    if (enabled !== false) throw new BadRequestException('自动轮转将在 P3 分配协议就绪后开放，当前仅可管理账号');
+    this.db.updateServer(spaceId, { agoraAccountPoolEnabled: 0 });
     return { ok: true };
   }
 

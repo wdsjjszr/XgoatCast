@@ -26,7 +26,10 @@ export class AgoraUsageService implements OnModuleInit {
   attachExisting() { for (const row of this.db.getUnfinishedSessions()) if (row.startedAt) this.touch(row.id); }
   recordTokenIdentity(sessionId: string, appId: string) {
     const row = this.db.getSessionById(sessionId);
-    if (row && this.supported(row) && (row.status === 'pending' || !row.agoraAppId)) this.db.updateSession(sessionId, { agoraAppId: appId });
+    if (row && this.supported(row) && (row.status === 'pending' || !row.agoraAppId)) {
+      const account = this.accounts.forSpace(row.serverId).find(account => account.app_id === appId.toLowerCase());
+      this.db.updateSession(sessionId, { agoraAppId: appId, agoraAccountId: account?.id || null });
+    }
   }
   private supported(row: ServerSession) { return this.db.getServer(row.serverId)?.platform === 'heychat'; }
 
@@ -35,7 +38,7 @@ export class AgoraUsageService implements OnModuleInit {
     if (!row || row.status === 'ended' || !this.supported(row)) return;
     if (!row.agoraAccountId) {
       const appId = row.agoraAppId || this.db.getServer(row.serverId)?.agoraAppId || '';
-      const account = this.accounts.byAppId(appId);
+      const account = this.accounts.forSpace(row.serverId).find(account => account.app_id === appId.toLowerCase());
       if (account) this.db.updateSession(sessionId, { agoraAccountId: account.id, agoraAppId: appId });
     }
     if (row.rtcStandardSeconds == null) {
@@ -134,16 +137,18 @@ export class AgoraUsageService implements OnModuleInit {
       safeRemainingStandardMinutes: Math.max(0, MONTHLY_STANDARD_SECONDS - used - SAFETY_STANDARD_SECONDS) / 60,
       estimateStatus: unknown ? 'unknown_mode_estimate' : calibrated ? 'calibrated_estimate' : 'local_estimate', usageCalibratedAt: account.last_sync_at };
   }
-  list() {
+  list(spaceId?: string) {
     this.flush();
-    return this.accounts.all().map(account => {
+    return (spaceId ? this.accounts.forSpace(spaceId) : this.accounts.all()).map(account => {
       const balance = this.balance(account);
-      return { ...this.accounts.publicInfo(this.accounts.get(account.id)), ...balance };
+      return { ...this.accounts.publicInfo(spaceId ? this.accounts.spaceAccount(spaceId, account.id) : this.accounts.get(account.id)), ...balance,
+        ...(spaceId ? { canUnlink: this.accounts.canUnlink(spaceId, account) } : {}) };
     });
   }
   async sync(id: string, automatic = false, now = Date.now()) {
     if (this.syncing.has(id)) throw new ConflictException('该账号正在校准');
     const account = this.accounts.get(id), day = hkDate(now);
+    if (!account.customer_id || !account.customer_secret || !account.project_id) throw new ConflictException('请先补充并验证 RESTful 凭证');
     const attempts = account.sync_day === day ? account.sync_attempts : 0;
     if (automatic && attempts >= 3) return;
     this.syncing.add(id);
@@ -185,7 +190,7 @@ export class AgoraUsageService implements OnModuleInit {
   async runDue(now = Date.now()) {
     const day = hkDate(now), scheduled = Date.parse(day + 'T10:00:00+08:00');
     for (const account of this.accounts.all()) {
-      if (this.syncing.has(account.id) || now < scheduled) continue;
+      if (!account.customer_id || !account.customer_secret || !account.project_id || this.syncing.has(account.id) || now < scheduled) continue;
       if (account.sync_day !== day || (account.next_sync_at > 0 && now >= account.next_sync_at)) await this.sync(account.id, true, now);
     }
   }
