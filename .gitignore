@@ -32,3 +32,8 @@ Thumbs.db
 
 # Local UI review screenshots
 .impeccable/review/
+
+# Local execution plan, working rules and progress notes
+/LOCAL_EXECUTION_PLAN.md
+/AGENT.md
+/LOCAL_WORK_LOG.md
