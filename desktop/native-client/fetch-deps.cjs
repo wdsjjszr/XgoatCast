@@ -19,6 +19,7 @@ async function download(url,name,expected){
   const dest=path.join(dir,'agora');fs.mkdirSync(dest,{recursive:true});
   if(process.platform==='win32')execFileSync('tar.exe',['-xf',zip,'-C',dest],{stdio:'inherit'});
   else execFileSync('unzip',['-oq',zip,'-d',dest],{stdio:'inherit'});
+  fs.cpSync(path.join(dest,'Shengwang_Native_SDK_for_Windows_FULL','sdk'),path.join(dest,'sdk'),{recursive:true});
   await download('https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp','json.hpp','9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6');
   await download('https://raw.githubusercontent.com/nlohmann/json/v3.11.3/LICENSE.MIT','json-LICENSE.txt');
   console.log('Dependencies ready.');
