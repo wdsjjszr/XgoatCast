@@ -8,7 +8,7 @@
 
 添加至少一个已启用、凭证完整且安全余量大于零的账号后，可开启 **启用本空间自动轮转**。关闭时沿用上方单账号配置，只需 App ID / 发布证书，不强加 RESTful 凭证或余额基准。开启后没有可用条目会明确报错，不回退原单账号或其他空间账号。
 
-Windows 需配套构建本轮原生源码；旧客户端在准备页会提前请求发布 Token，不应与开启轮转的新服务端混用。本轮未发布安装包，原生构建与实机验收待用户提供编译环境后完成。
+Windows 需配套构建本轮原生源码；旧客户端会在准备页提前请求发布 Token，并把新暂停状态当作停止，不应与新轮转/暂停协议混用。本轮未发布安装包，原生构建与实机验收待用户提供编译环境后完成。
 
 ## 空间使用权与共享账本
 
@@ -58,7 +58,23 @@ Windows 来源枚举使用 `GET /api/share/preview`，只返回本空间预览 A
 
 停用只影响后续分配，不迁移运行中的会话。有未结束会话时不能删除账号或更换发布凭证；已有用量账本的账号以停用代替删除，保留历史。
 
-## 迁移与验收
+## 无人暂停、主动停止与结束（黑盒语音）
+
+在 `/xchelp` 打开的空间面板 **共享配置 → 会话计时** 设置：
+
+- **无人观看自动暂停**（`noViewerTimeoutSec`）：新黑盒空间默认 30 秒，已有配置保留原数值。连续无人观看到期进入 `auto_paused`，发布者离开 RTC，但保留屏幕选择与采集授权；界面明确提示有人加入会自动恢复。观众和共享端保留业务 SSE，控制页在线本身不代替采集端心跳。
+- **主动停止后结束等待**（`stoppedTimeoutSec`）：默认 60 秒；升级时一次性复制原 `idleTimeoutSec`。普通“停止共享”关闭采集、退出 RTC，进入 `grace/stopped`；观众加入不自动恢复，需共享者重新选择画面。倒计时到期结束原链接，重复停止不延长期限。
+- **未开始 / 异常恢复等待**（`idleTimeoutSec`）：独立控制首次开始和心跳异常恢复，不再挪作主动停止计时。输入沿用 10～600 秒钳制，watchdog 约 5 秒精度。
+
+自动暂停中有观众通过 SSE 加入，只通知原共享端唤醒。原共享端以同账号、频道和 UID 入会并发布成功后，以 `autoResume: true` 调用原 `start` 确认才变 `active`；观众随后入会订阅。暂停期间不传输 RTC，账号若仍有其他房间消耗则继续显示账号总预算。主动停止、采集终止和最终结束会取消旧恢复操作，不静默重新请求采集权限。
+
+“停止并结束会话”立即关闭采集并结束原观看链接，不经过等待倒计时。黑盒卡片仅在首次开始、最终结束更新，自动暂停和恢复不反复发卡。暂停中共享端关闭仍受心跳回收和 24 小时上限约束；其他平台保持原无人结束/停止计时行为。
+
+接口沿用分享令牌鉴权：`POST /api/share/stop`、新增 `POST /api/share/end` 均携带 `{ clientId }`，校验已锁定的发布者；`end` 可安全重复提交。`POST /api/share/heartbeat` 由持有采集的浏览器 hook 或 Windows 客户端发送，支持 `active/auto_paused` 及心跳宽限恢复，不恢复 `grace/stopped`。`SessionInfo/session_state` 新增 `graceReason`、`stoppedRemainingSec`，停止倒计时不再复用 `idleRemainingSec`。
+
+本地状态/计时与采集竞态检查：在 `server` 目录运行 `node --require ts-node/register --test test/session-pause.spec.ts test/web-share-pause-runtime.spec.ts test/desktop-sharing.spec.ts test/restart-recovery.spec.ts test/screen-share-runtime.spec.ts`。仓库根目录运行 `node --test desktop/test/native-pause-protocol.test.cjs` 检查联调页状态、锁定、SSE 和结束契约。Windows 的暂停、独立倒计时和结束控件纳入 `test-ui.cjs`，需构建后执行；仅修改源码不等于实机验收。
+
+## 升级和账号检查
 
 本轮按全新部署准备，不需要导入旧数据库。代码仍可升级 P2 表结构：增加空间关联/关闭的池标记，并允许尚未验证的 RESTful Customer ID / 项目 ID 为 NULL，保留已有账本及重试进度；不自动删除运行数据库。部署前按部署文档备份运行版本和 SQLite；需要恢复时先停服务，再配套恢复旧版本和备份，不在运行中直接替换数据库。
 

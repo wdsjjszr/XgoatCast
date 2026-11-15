@@ -9,6 +9,8 @@ interface SessionState extends AgoraBudget {
   ended: boolean;
   publisherClientId?: string;
   idleRemainingSec?: number;
+  stoppedRemainingSec?: number;
+  graceReason?: 'heartbeat' | 'stopped' | null;
   noViewerRemainingSec?: number;
   lowLatency?: boolean;
 }
@@ -88,6 +90,8 @@ export function useSessionSSE(token: string, role: 'publisher' | 'viewer', passi
           viewerCount: data.viewerCount ?? s.viewerCount,
           publisherClientId: data.publisherClientId,
           idleRemainingSec: data.idleRemainingSec,
+          stoppedRemainingSec: data.stoppedRemainingSec,
+          graceReason: data.graceReason,
           noViewerRemainingSec: data.noViewerRemainingSec,
           lowLatency: data.lowLatency,
           agoraAccountLabel: data.agoraAccountLabel,
@@ -144,9 +148,10 @@ export function useSessionSSE(token: string, role: 'publisher' | 'viewer', passi
       quality?: string,
       clientId?: string,
       lowLatency?: boolean,
+      autoResume?: boolean,
     ): Promise<{ ok: boolean; message?: string }> => {
       try {
-        const resp = await api.startSharing(token, quality, clientId, lowLatency);
+        const resp = await api.startSharing(token, quality, clientId, lowLatency, autoResume);
         return resp;
       } catch (e: any) {
         console.error('startSharing fetch error:', e);
@@ -156,13 +161,10 @@ export function useSessionSSE(token: string, role: 'publisher' | 'viewer', passi
     [token],
   );
 
-  const stopSharing = useCallback(async () => {
-    try {
-      await api.stopSharing(token);
-    } catch (e: any) {
-      console.error('stopSharing fetch error:', e);
-    }
+  const stopSharing = useCallback(async (clientId: string) => {
+    return api.stopSharing(token, clientId);
   }, [token]);
 
-  return { ...state, startSharing, stopSharing };
+  const endSharing = useCallback((clientId: string) => api.endSharing(token, clientId), [token]);
+  return { ...state, startSharing, stopSharing, endSharing };
 }

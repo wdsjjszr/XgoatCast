@@ -68,9 +68,7 @@ function ViewContent() {
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const socket = useSessionSSE(token, 'viewer');
-  // 仅在共享者已开始共享（active/grace）时才接入声网，pending 状态不连接以节省计费；
-  // GRACE 期间保持 Agora 连接不 leave/rejoin，分享者恢复时 user-published 自动触发重新订阅
-  const active = socket.status === 'active' || socket.status === 'grace';
+  const active = socket.status === 'active' || (socket.status === 'grace' && socket.graceReason !== 'stopped');
   const view = useAgoraView(token, active, socket.lowLatency ?? false);
   const screenRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -269,12 +267,14 @@ function ViewContent() {
           />
 
           {/* 加载/等待/暂停状态：未加入、暂停宽限期、或等待分享者开始 */}
-          {(!view.joined || socket.status === 'grace' || socket.status === 'pending') && !socket.ended && !view.error && (
+          {(!view.joined || socket.status === 'grace' || socket.status === 'pending' || socket.status === 'auto_paused') && !socket.ended && !view.error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
               <Loader2 className="w-8 h-8 text-brand animate-spin" />
               <p className="text-sm text-muted">
-                {socket.status === 'grace'
-                  ? '分享者已暂停，等待恢复...'
+                {socket.status === 'auto_paused'
+                  ? '已通知共享者恢复，正在等待画面…'
+                  : socket.status === 'grace'
+                  ? socket.graceReason === 'stopped' ? '共享者已停止采集，等待手动恢复…' : '共享连接中断，等待恢复…'
                   : socket.status === 'pending'
                     ? '等待分享者开始共享...'
                     : '正在连接...'}

@@ -17,9 +17,15 @@ export class ShareTokenGuard implements CanActivate {
     if (typeof token !== 'string' || !token || token.length > 200) {
       throw new UnauthorizedException('missing token');
     }
-    const publisher = req.query.role === 'publisher' || /\/(start|stop|heartbeat|preview)\/*$/i.test(req.path);
+    const ending = /\/end\/*$/i.test(req.path);
+    const publisher = req.query.role === 'publisher' || /\/(start|stop|end|heartbeat|preview)\/*$/i.test(req.path);
+    if (publisher && ['subscriber', 'viewer'].includes(req.query.role)) throw new UnauthorizedException('publisher operation required');
     const resolved = this.panels.resolve(req, token, publisher);
-    req.session = this.auth.verifyShareToken(resolved.token);
+    req.session = this.auth.verifyShareToken(resolved.token, ending);
+    if ((ending || (req.session.platform === 'heychat' && /\/stop\/*$/i.test(req.path))) &&
+        req.session.publisherClientId && req.body?.clientId !== req.session.publisherClientId) {
+      throw new UnauthorizedException('publisher locked');
+    }
     if (req.session.platform === 'panel') this.panels.active(this.panels.panel(req.session.externalSpaceId).space);
     req.panelViewer = resolved.viewer;
     req.shareToken = token;

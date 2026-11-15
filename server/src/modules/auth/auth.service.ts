@@ -8,12 +8,12 @@ export class AuthService {
     private readonly sessionService: SessionService,
   ) {}
 
-  verifyShareToken(token: string): ShareSession {
+  verifyShareToken(token: string, allowEnded = false): ShareSession {
     const session = this.sessionService.getByToken(token);
     if (!session) {
       throw new UnauthorizedException('invalid share link');
     }
-    if (session.status === 'ended') {
+    if (session.status === 'ended' && !allowEnded) {
       throw new UnauthorizedException('share ended');
     }
     return session;

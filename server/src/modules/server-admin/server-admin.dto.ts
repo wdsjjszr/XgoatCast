@@ -59,6 +59,10 @@ export class UpdateServerConfigDto {
 
   @IsOptional()
   @IsNumber()
+  stoppedTimeoutSec?: number;
+
+  @IsOptional()
+  @IsNumber()
   @Min(0)
   allowLowLatency?: number;
 }

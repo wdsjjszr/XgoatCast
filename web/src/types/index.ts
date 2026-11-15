@@ -1,4 +1,4 @@
-export type SessionStatus = 'pending' | 'active' | 'grace' | 'ended';
+export type SessionStatus = 'pending' | 'active' | 'auto_paused' | 'grace' | 'ended';
 
 export interface AgoraBudget {
   agoraAccountLabel?: string;
@@ -45,6 +45,8 @@ export interface SessionInfo extends AgoraBudget {
   publisherClientId?: string;
   desktopLaunch?: { id: string; clientId: string; respondedAt: number };
   idleRemainingSec?: number;
+  stoppedRemainingSec?: number;
+  graceReason?: 'heartbeat' | 'stopped' | null;
   noViewerRemainingSec?: number;
   /** true=低延迟模式(rtc/互动直播)，false=极速直播(默认) */
   lowLatency?: boolean;

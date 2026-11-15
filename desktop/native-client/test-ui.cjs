@@ -32,7 +32,7 @@ const report = path.join(output, 'interaction.json');
 run(['--ui-test', report]);
 const interactions = JSON.parse(fs.readFileSync(report, 'utf8'));
 for (const key of [
-  'aboutDialog', 'trayHoverRendering', 'updatePrompt', 'microphoneSelection', 'sharedStatusFooter', 'accountBudget', 'inlineAutoStop', 'framelessWindow', 'dpiIcons', 'waitingConnection', 'connectionPriority', 'trayMenuPlacement', 'blockedSmallPanel', 'customMenus', 'selectionPreview', 'qualityMenuPolicy', 'pointerCancellation', 'sourceSelection', 'compactHitTargets', 'waitingGuard',
+  'aboutDialog', 'trayHoverRendering', 'updatePrompt', 'microphoneSelection', 'sharedStatusFooter', 'accountBudget', 'inlineAutoPause', 'autoPaused', 'stoppedCountdown', 'endSession', 'framelessWindow', 'dpiIcons', 'waitingConnection', 'connectionPriority', 'trayMenuPlacement', 'blockedSmallPanel', 'customMenus', 'selectionPreview', 'qualityMenuPolicy', 'pointerCancellation', 'sourceSelection', 'compactHitTargets', 'waitingGuard',
   'reducedMotion', 'immediateExpansion', 'countdownSemantics', 'hoverHints',
   'independentSoundPanel', 'compactControlsHidden', 'layoutBounds', 'scrollRegions',
   'titlebarHitTargets', 'automaticLayout', 'compactAudioInteraction',

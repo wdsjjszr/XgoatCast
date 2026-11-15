@@ -65,7 +65,7 @@ void cancelInput();
 float uiWidth(){return expanded?layout::expandedWidth:smallPanel()?layout::waitingWidth:layout::compactWidth;}
 float uiHeight(){return expanded?layout::expandedHeight:smallPanel()?layout::waitingHeight:layout::compactHeight;}
 void setExpanded(bool value);
-void syncLayout(){setExpanded(!smallPanel()&&state.phase!=Phase::Sharing&&state.phase!=Phase::Stopping);RECT r{};GetClientRect(window,&r);if(r.right!=int(uiWidth()*scale)||r.bottom!=int(uiHeight()*scale)){cancelInput();resize();}}
+void syncLayout(){setExpanded(!smallPanel()&&(state.phase!=Phase::Sharing&&state.phase!=Phase::AutoPaused)&&state.phase!=Phase::Stopping);RECT r{};GetClientRect(window,&r);if(r.right!=int(uiWidth()*scale)||r.bottom!=int(uiHeight()*scale)){cancelInput();resize();}}
 std::wstring audioGroup(const std::wstring&name){if(name==L"kaiheila"||name==L"开黑啦")return L"kook";if(name==L"heychat"||name==L"黑盒语音")return L"heyboxchat";if(name==L"discordptb"||name==L"discordcanary")return L"discord";return name;}
 std::vector<int> filteredApps(){std::vector<int> result;for(int i=0;i<(int)audioNames.size();++i)if(audioSearch.empty()||audioNames[i].find(stem(audioSearch))!=std::wstring::npos)result.push_back(i);return result;}
 struct Hit {RectF rect;int id;};
@@ -111,7 +111,7 @@ void registerProtocol(bool replaceExisting=false){
   registered=protocolRegistered();registrationPrompt=false;localMessage=L"网页唤起已启用";
 }
 void unregisterProtocol(){if(protocolRegistered())RegDeleteTreeW(HKEY_CURRENT_USER,L"Software\\Classes\\xgoatcast");if(autoStart()){HKEY key;if(RegOpenKeyExW(HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",0,KEY_SET_VALUE,&key)==ERROR_SUCCESS){RegDeleteValueW(key,L"XgoatCast");RegCloseKey(key);}}registered=false;localMessage=L"已取消本程序的网页唤起和开机启动";}
-bool busy(){return state.phase==Phase::Starting||state.phase==Phase::Sharing||state.phase==Phase::Stopping||state.phase==Phase::Loading;}
+bool busy(){return state.phase==Phase::Starting||(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Stopping||state.phase==Phase::Loading;}
 void persist(){if(previewMode)return;try{saveSettings(settings);settings.loaded=true;}catch(const std::exception&e){localError=true;localMessage=wide(e.what());}}
 void resize(){RECT r;GetWindowRect(window,&r);MONITORINFO mi{sizeof(mi)};GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&mi);
   if(!previewMode)scale=std::min(GetDpiForWindow(window)/96.f,std::min((mi.rcWork.right-mi.rcWork.left)/uiWidth(),(mi.rcWork.bottom-mi.rcWork.top)/uiHeight()));
@@ -176,12 +176,12 @@ void drawText(HDC dc,const RECT& bounds){
 }
 int remainingSeconds(){
   if(!hasLaunch)return -1;int remaining=-1;
-  for(int seconds:{state.idleSeconds,state.noViewerSeconds})if(seconds>=0)remaining=remaining<0?seconds:std::min(remaining,seconds);
+  for(int seconds:{state.idleSeconds,state.stoppedSeconds,state.noViewerSeconds})if(seconds>=0)remaining=remaining<0?seconds:std::min(remaining,seconds);
   if(remaining<0)return -1;int elapsed=state.observedAt?int((GetTickCount64()-state.observedAt)/1000):0;return std::max(0,remaining-elapsed);
 }
 bool smallPanel(){
   if(!hasLaunch)return true;
-  if(state.phase==Phase::Sharing||state.phase==Phase::Stopping||state.phase==Phase::Starting)return false;
+  if((state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Stopping||state.phase==Phase::Starting)return false;
   return localError||state.phase==Phase::Idle||state.phase==Phase::Loading||state.phase==Phase::Failed||remainingSeconds()==0||(state.phase==Phase::Ready&&(state.allowedQualities.empty()||state.sources.empty()));
 }
 std::wstring countdownText(){int remaining=remainingSeconds();if(remaining<0)return {};
@@ -231,8 +231,8 @@ std::wstring helpFor(int id){
   if(id==20||id==21)return !state.allowPreference?L"服务器未开放画面偏好":busy()?L"停止当前共享后可更换画面偏好":id==20?L"画质优先，适合文字和细节":L"帧率优先，适合游戏和动态画面";
   if(id==22)return !state.allowLowLatency?L"服务器未开放低延迟模式":busy()?L"低延迟模式需停止共享后修改":settings.lowLatency?L"低延迟已开启，点击关闭":L"开启低延迟，减少画面等待";
   if(id==30)return (settings.microphone?L"麦克风已开启，点击静音 · ":L"点击开启麦克风 · ")+microphoneName();
-  if(id==40&&remainingSeconds()==0&&state.phase!=Phase::Sharing)return L"等待共享已超时，请从网页重新发起";
-  if(id==40)return state.phase==Phase::Sharing||state.phase==Phase::Starting?L"停止当前共享":selected<0?L"先选择一个共享画面":busy()?L"正在处理会话，请稍候":L"按当前画面和声音设置开始共享";
+  if(id==40&&remainingSeconds()==0&&(state.phase!=Phase::Sharing&&state.phase!=Phase::AutoPaused))return L"等待共享已超时，请从网页重新发起";
+  if(id==40)return (state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Starting?L"停止当前共享":selected<0?L"先选择一个共享画面":busy()?L"正在处理会话，请稍候":L"按当前画面和声音设置开始共享";
   if(id>=50&&id<1000)return busy()?L"停止当前共享后可更换画质":L"仅列出此服务器允许使用的画质";
   if(id>=1000&&id<20000){int index=id-1000;return index<(int)state.sources.size()?state.sources[index].name:L"选择共享画面";}
   if(id>=20000&&id<20000+(int)audioNames.size()){auto name=audioNames[id-20000];return name+(settings.included.count(name)?L" · 已加入共享，点击关闭":L" · 未共享声音，点击加入");}
@@ -254,7 +254,7 @@ void selectionTrack(Graphics&g,RectF r){fill(g,r,ui::controlTrack,ui::controlRad
 void button(Graphics&g,int id,RectF r,const std::wstring&s,bool primary=false,bool enabled=true,bool active=false){
   bool selector=id==10||id==11||id==20||id==21||(id>=50&&id<1000);
   bool quiet=id==6||id==12;
-  bool stop=id==40&&(state.phase==Phase::Sharing||state.phase==Phase::Starting||state.phase==Phase::Stopping);
+  bool stop=id==40&&((state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Starting||state.phase==Phase::Stopping);
   float hover=motion(id*4,enabled&&hoverId==id?1.f:0.f),press=motion(id*4+1,enabled&&pressedId==id&&hoverId==id?1.f:0.f);
   Color ink=enabled?text:muted;
   if(primary){
@@ -317,7 +317,7 @@ void drawPreview(Graphics&g){
   stroke(g,r,ui::interactiveDefault,1,3);
 }
 void paintCompactSound(Graphics&g){
-  bool enabled=state.phase==Phase::Sharing;bool supported=windowsBuild()>=20348;
+  bool enabled=(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused);bool supported=windowsBuild()>=20348;
   fill(g,RectF(496,56,64,314),paper,2);hairline(g,496,56,496,370,ui::seam);
   auto audioIcon=[&](int id,RectF r,bool on,HICON icon,bool mic){
     bool available=enabled&&(mic||supported);
@@ -338,16 +338,19 @@ void paintCompactSound(Graphics&g){
 }
 void paintStatusFooter(Graphics&g){
   float top=uiHeight()-layout::statusHeight;hairline(g,16,top,uiWidth()-16,top,ui::seam);
-  bool expired=hasLaunch&&remainingSeconds()==0&&state.phase!=Phase::Sharing&&state.phase!=Phase::Starting&&state.phase!=Phase::Stopping;
+  bool expired=hasLaunch&&remainingSeconds()==0&&(state.phase!=Phase::Sharing&&state.phase!=Phase::AutoPaused)&&state.phase!=Phase::Starting&&state.phase!=Phase::Stopping;
   std::wstring notice;
   Color light=paper;
   if(localError){notice=localizedStatus(localMessage);light=ui::error;}
+  else if(state.message==L"共享会话已结束，请从网页重新发起"){notice=state.message;light=ui::info;}
   else if(expired){notice=L"等待共享已超时，请从网页重新发起";light=ui::error;}
   else if(state.phase==Phase::Failed){notice=localizedStatus(state.message);light=ui::error;}
   else if(!localMessage.empty())notice=localizedStatus(localMessage);
+  else if(hasLaunch&&state.phase==Phase::AutoPaused){notice=L"无人观看，已暂停传输";light=ui::warning;}
   else if(hasLaunch&&state.phase==Phase::Sharing){notice=L"共享中";light=ui::success;}
   else if(hasLaunch&&state.phase==Phase::Starting)notice=L"正在启动共享…";
   else if(hasLaunch&&state.phase==Phase::Stopping)notice=L"正在停止共享…";
+  else if(hasLaunch&&state.stoppedSeconds>=0)notice=L"已停止采集，"+std::to_wstring(remainingSeconds())+L"秒后结束；需手动恢复";
   else if(!hasLaunch){
     if(serverConnection==ServerConnection::Online){notice=L"连接服务器成功，等待网页唤起";light=ui::success;}
     else if(serverConnection==ServerConnection::Offline){notice=L"无法连接服务器，将自动重试";light=ui::error;}
@@ -369,20 +372,21 @@ void paintStatusFooter(Graphics&g){
   }
 }
 void paintSession(Graphics&g){
-  bool live=state.phase==Phase::Sharing,starting=state.phase==Phase::Starting,stopping=state.phase==Phase::Stopping;
+  bool live=(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused),starting=state.phase==Phase::Starting,stopping=state.phase==Phase::Stopping;
   auto count=countdownText();
   bool canStart=canBeginSharing();
   if(smallPanel()){
     float top=layout::titleHeight+(uiHeight()-layout::titleHeight-layout::statusHeight-76)/2;
     label(g,L"等待网页接入",RectF(24,top,432,40),28,text,true,true);
     label(g,L"从共享网页发起，选择你要分享的画面。",RectF(24,top+48,432,28),14,muted,false,true);
+    if(hasLaunch&&state.phase==Phase::Failed)button(g,41,RectF(128,172,224,28),L"停止并结束会话",false,true);
     paintStatusFooter(g);
 
   }else if(expanded){
     hairline(g,688,84,688,764,ui::seam);
     bool expired=remainingSeconds()==0&&!live&&!starting;
     paintStatusFooter(g);
-    RectF action(712,650,264,100);bool enabled=live||starting||canStart;
+    RectF action(712,650,264,72);bool enabled=live||starting||canStart;
     Color base=enabled?orange:ui::controlDisabled,ink=enabled?orangeInk:muted;
     fill(g,action,enabled&&pressedId==40&&hoverId==40?Color(255,226,72,0):enabled&&hoverId==40?Color(255,246,88,15):base,8);
     label(g,live||starting?L"停止共享":expired?L"等待已超时":L"开始共享",RectF(732,660,224,24),14,ink);
@@ -390,17 +394,19 @@ void paintSession(Graphics&g){
     else glyph(g,live||starting?0xE71A:0xE768,RectF(732,694,32,36),26,ink);
     label(g,std::to_wstring(state.viewers)+L" 人观看",RectF(874,705,82,28),12,ink,false,true);
     if(enabled)hits.push_back({action,40});hint(40,action);
+    button(g,41,RectF(712,730,264,28),L"停止并结束会话",false,hasLaunch&&remainingSeconds()!=0&&!stopping);
   }else{
-    label(g,selectedSourceName(),RectF(16,64,464,28),13,text,true);hint(9004,RectF(16,64,464,28),selectedSourceName());
+    label(g,selectedSourceName(),RectF(16,64,300,28),13,text,true);hint(9004,RectF(16,64,300,28),selectedSourceName());
+    button(g,41,RectF(328,62,208,30),L"停止并结束会话",false,!stopping);
     drawPreview(g);paintCompactSound(g);
     glyph(g,0xE716,RectF(20,384,20,24),18,muted);
     auto viewers=std::to_wstring(state.viewers);float numberWidth=std::min(100.f,textWidth(viewers,26,true,L"Bahnschrift"));
     label(g,viewers,RectF(48,378,numberWidth,34),26,text,true);textRuns.back().numeric=true;
     label(g,L"人观看",RectF(56+numberWidth,382,52,26),12,muted);
     if(state.viewers==0&&state.noViewerSeconds>=0){
-      auto caption=L"（"+std::to_wstring(remainingSeconds())+L"秒后自动停止）";
+      auto caption=L"（"+std::to_wstring(remainingSeconds())+(state.autoPause?L"秒后自动暂停）":L"秒后自动停止）");
       RectF timeout(108+numberWidth,382,272-numberWidth,26);label(g,caption,timeout,12,muted);
-      hint(9002,timeout,L"无人观看时按服务器期限自动停止；有人加入观看后取消");
+      hint(9002,timeout,state.autoPause?L"无人观看时自动暂停；保留采集授权，有人加入自动恢复":L"无人观看时按服务器期限自动停止；有人加入观看后取消");
     }
     button(g,40,RectF(396,378,140,36),stopping?L"正在停止":L"停止共享",true,live||starting);
     paintStatusFooter(g);
@@ -462,7 +468,7 @@ struct MenuItem {int id;std::wstring label;bool checked=false,enabled=true;};
 std::vector<MenuItem> menuItems(){
   std::vector<MenuItem> items;if(popup==1){for(size_t i=0;i<state.allowedQualities.size();++i)items.push_back({50+(int)i,qualityName(state.allowedQualities[i]),settings.quality==state.allowedQualities[i]});}
   if(popup==3){items.push_back({40000,microphones.defaultName.empty()?L"默认设备":L"默认设备 · "+microphones.defaultName,settings.microphoneDevice.empty()});for(size_t i=0;i<microphones.devices.size();++i)items.push_back({40001+int(i),microphones.devices[i].name,settings.microphoneDevice==microphones.devices[i].id});}
-  if(popup==2)items={{30002,L"停止共享",false,state.phase==Phase::Sharing||state.phase==Phase::Starting},{30003,L"登录 Windows 后启动",autoStart()},{30004,registered?L"取消网页唤起注册":L"启用网页唤起"},{30006,L"关于"},{30005,L"退出 XgoatCast"}};
+  if(popup==2)items={{30002,L"停止共享",false,(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Starting},{30003,L"登录 Windows 后启动",autoStart()},{30004,registered?L"取消网页唤起注册":L"启用网页唤起"},{30006,L"关于"},{30005,L"退出 XgoatCast"}};
   if(popup==2&&availableUpdate.available)items.insert(items.end()-1,{30007,L"立即更新"});
   return items;
 }
@@ -546,7 +552,7 @@ std::shared_ptr<const PreviewFrame> syntheticPreview(){
 void renderPreview(const std::wstring& output,bool showRegistration,bool showAudio,int compactMode=0){
   previewMode=true;sourcePreview=compactMode==0;expanded=!showAudio&&(compactMode==0||compactMode==2);settings.microphone=false;settings.detail=true;
   settings.audio=true;settings.screens=true;settings.quality="1080p_2";hasLaunch=true;registered=!showRegistration;registrationPrompt=showRegistration;state.phase=Phase::Ready;state.message=L"选择一个画面，开始共享";state.room=L"我的共享";state.allowLowLatency=true;state.allowPreference=true;
-  state.allowedQualities={"480p_2","720p30","1080p_2","1080p60","1440p30","1440p60","4k30"};state.sources={{1,true,L"显示器 1"},{2,true,L"显示器 2"},{3,true,L"显示器 3"}};selected=0;settings.lowLatency=false;audioPanel=showAudio;audioNames={L"notepad",L"explorer",L"cmd",L"powershell",L"chrome",L"discord",L"music"};scale=showRegistration?1.5f:1.f;hasLaunch=!showAudio;if(compactMode==1||compactMode==3){state.phase=Phase::Sharing;state.message=L"画面与声音正在共享";settings.lowLatency=true;settings.microphone=true;}if(compactMode==2){selected=-1;}SetWindowPos(window,nullptr,0,0,int(uiWidth()*scale),int(uiHeight()*scale),SWP_NOMOVE|SWP_NOZORDER);settings.included={L"notepad"};{wchar_t system[MAX_PATH];GetSystemDirectoryW(system,MAX_PATH);std::wstring base=system;std::wstring windows=base.substr(0,base.find_last_of(L"\\"));for(auto&[name,path]:std::vector<std::pair<std::wstring,std::wstring>>{{L"notepad",base+L"\\notepad.exe"},{L"explorer",windows+L"\\explorer.exe"},{L"cmd",base+L"\\cmd.exe"},{L"powershell",windows+L"\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"}}){SHFILEINFOW info{};if(SHGetFileInfoW(path.c_str(),0,&info,sizeof(info),SHGFI_ICON|SHGFI_LARGEICON))appIcons[name]=info.hIcon;}}state.viewers=compactMode==1?3:0;state.idleSeconds=compactMode==1||compactMode==3?-1:120;state.noViewerSeconds=compactMode==3?93:-1;state.observedAt=GetTickCount64();state.serverObservedAt=state.observedAt;
+  state.allowedQualities={"480p_2","720p30","1080p_2","1080p60","1440p30","1440p60","4k30"};state.sources={{1,true,L"显示器 1"},{2,true,L"显示器 2"},{3,true,L"显示器 3"}};selected=0;settings.lowLatency=false;audioPanel=showAudio;audioNames={L"notepad",L"explorer",L"cmd",L"powershell",L"chrome",L"discord",L"music"};scale=showRegistration?1.5f:1.f;hasLaunch=!showAudio;if(compactMode==1||compactMode==3){state.phase=Phase::Sharing;state.message=L"画面与声音正在共享";settings.lowLatency=true;settings.microphone=true;}if(compactMode==2){selected=-1;}SetWindowPos(window,nullptr,0,0,int(uiWidth()*scale),int(uiHeight()*scale),SWP_NOMOVE|SWP_NOZORDER);settings.included={L"notepad"};{wchar_t system[MAX_PATH];GetSystemDirectoryW(system,MAX_PATH);std::wstring base=system;std::wstring windows=base.substr(0,base.find_last_of(L"\\"));for(auto&[name,path]:std::vector<std::pair<std::wstring,std::wstring>>{{L"notepad",base+L"\\notepad.exe"},{L"explorer",windows+L"\\explorer.exe"},{L"cmd",base+L"\\cmd.exe"},{L"powershell",windows+L"\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"}}){SHFILEINFOW info{};if(SHGetFileInfoW(path.c_str(),0,&info,sizeof(info),SHGFI_ICON|SHGFI_LARGEICON))appIcons[name]=info.hIcon;}}state.autoPause=true;state.viewers=compactMode==1?3:0;state.idleSeconds=compactMode==1||compactMode==3?-1:120;state.noViewerSeconds=compactMode==3?93:-1;state.observedAt=GetTickCount64();state.serverObservedAt=state.observedAt;
   if(compactMode==1||compactMode==3)liveFrame=syntheticPreview();else liveFrame.reset();
   if(compactMode==0){auto fixture=syntheticPreview();state.sources[0].width=fixture->width;state.sources[0].height=fixture->height;state.sources[0].image=fixture->image;}
   microphones.defaultName=L"麦克风 (Realtek Audio)";microphones.devices={{"fixture-internal",L"麦克风 (Realtek Audio)"},{"fixture-usb",L"USB 麦克风"}};settings.microphoneDevice.clear();
@@ -589,7 +595,7 @@ void refreshWindowIcons(UINT dpi){
   if(window){SetClassLongPtrW(window,GCLP_HICON,reinterpret_cast<LONG_PTR>(icon));SetClassLongPtrW(window,GCLP_HICONSM,reinterpret_cast<LONG_PTR>(smallIcon));SendMessageW(window,WM_SETICON,ICON_BIG,reinterpret_cast<LPARAM>(icon));SendMessageW(window,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(smallIcon));}
   if(previous)DestroyIcon(previous);if(previousSmall)DestroyIcon(previousSmall);
 }
-void tray(bool add){NOTIFYICONDATAW n{};n.cbSize=sizeof(n);n.hWnd=window;n.uID=1;n.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP;n.uCallbackMessage=WM_TRAY;n.hIcon=smallIcon;wcscpy_s(n.szTip,state.phase==Phase::Sharing?L"XgoatCast · 正在共享":L"XgoatCast · 等待共享");Shell_NotifyIconW(add?NIM_ADD:NIM_MODIFY,&n);}
+void tray(bool add){NOTIFYICONDATAW n{};n.cbSize=sizeof(n);n.hWnd=window;n.uID=1;n.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP;n.uCallbackMessage=WM_TRAY;n.hIcon=smallIcon;wcscpy_s(n.szTip,(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)?L"XgoatCast · 正在共享":L"XgoatCast · 等待共享");Shell_NotifyIconW(add?NIM_ADD:NIM_MODIFY,&n);}
 void receive(const std::wstring& uri){
   if(busy()){localMessage=L"请先停止当前共享，再切换会话";show();return;}
   auto next=parseLaunch(uri);
@@ -625,7 +631,8 @@ void act(int id){
   if(id>=20000&&id<20000+(int)audioNames.size()){auto name=audioNames[id-20000];bool on=!settings.included.count(name);auto set=[&](const std::wstring& n){if(on)settings.included.insert(n);else settings.included.erase(n);};set(name);if(name==L"kook"){set(L"kaiheila");set(L"开黑啦");}if(name==L"heyboxchat"){set(L"heychat");set(L"黑盒语音");}if(name==L"discord"){set(L"discordptb");set(L"discordcanary");}if(session)session->updateAudio(settings);}
 
   if(id>=1000&&id<20000){selected=id-1000;sourcePreview=true;cancelInput();}
-  if(id==40){if(state.phase==Phase::Sharing||state.phase==Phase::Starting){state.phase=Phase::Stopping;session->stop();}else if(canBeginSharing()){persist();session->start(state.sources[selected],settings);state.phase=Phase::Starting;}}
+  if(id==41&&session){state.phase=Phase::Stopping;session->end();}
+  if(id==40){if((state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Starting){state.phase=Phase::Stopping;session->stop();}else if(canBeginSharing()){persist();session->start(state.sources[selected],settings);state.phase=Phase::Starting;}}
   InvalidateRect(window,nullptr,FALSE);
 }
 HWND trayPopup=nullptr;int trayHover=-1,trayPressed=-1;float trayScale=1;
@@ -664,7 +671,7 @@ LRESULT CALLBACK trayPopupProc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
 }
 void trayMenu(){
   if(trayPopup){SetForegroundWindow(trayPopup);return;}
-  trayItems={{30002,L"停止共享",false,state.phase==Phase::Sharing||state.phase==Phase::Starting},{30003,L"登录 Windows 后启动",autoStart()},{30004,registered?L"取消网页唤起注册":L"启用网页唤起"},{30006,L"关于"},{30005,L"退出 XgoatCast"}};
+  trayItems={{30002,L"停止共享",false,(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Starting},{30003,L"登录 Windows 后启动",autoStart()},{30004,registered?L"取消网页唤起注册":L"启用网页唤起"},{30006,L"关于"},{30005,L"退出 XgoatCast"}};
   if(availableUpdate.available)trayItems.insert(trayItems.end()-1,{30007,L"立即更新"});
   POINT cursor{};GetCursorPos(&cursor);NOTIFYICONIDENTIFIER identity{sizeof(identity),window,1};RECT anchor{};if(SUCCEEDED(Shell_NotifyIconGetRect(&identity,&anchor)))cursor={anchor.right,anchor.top};
   MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromPoint(cursor,MONITOR_DEFAULTTONEAREST),&monitor);
@@ -717,7 +724,7 @@ int aboutPrompt(bool test=false){
   int choice=0;check(TaskDialogIndirect(&config,&choice,nullptr,nullptr),"无法显示关于窗口");return choice;
 }
 void systemAction(int item){
-  if(item==102&&session&&(state.phase==Phase::Sharing||state.phase==Phase::Starting))act(40);
+  if(item==102&&session&&((state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)||state.phase==Phase::Starting))act(40);
   if(item==103){if(autoStart()){HKEY k;if(RegOpenKeyExW(HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",0,KEY_SET_VALUE,&k)==ERROR_SUCCESS){RegDeleteValueW(k,L"XgoatCast");RegCloseKey(k);}}else regWrite(L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",L"XgoatCast",L"\""+exePath()+L"\" --tray");}
   if(item==104){if(registered)unregisterProtocol();else registerProtocol();}if(item==105){quitting=true;DestroyWindow(window);}else InvalidateRect(window,nullptr,FALSE);
   if(item==106&&aboutPrompt()==1001){show();checkForUpdates(true);}
@@ -759,11 +766,11 @@ LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){try{
       InvalidateRect(h,nullptr,FALSE);return 0;
     }
     case WM_SERVER_STATUS:if(serverMonitor&&!hasLaunch){serverConnection=serverMonitor->snapshot();InvalidateRect(h,nullptr,FALSE);}return 0;
-    case WM_STATE:{auto old=selected>=0&&selected<(int)state.sources.size()?state.sources[selected].id:int64_t(-1);bool screen=selected>=0&&selected<(int)state.sources.size()?state.sources[selected].screen:false;auto previousQualities=state.allowedQualities;state=session->snapshot();if(popup==1&&previousQualities!=state.allowedQualities)cancelInput();if(state.phase!=Phase::Sharing)liveFrame.reset();selected=-1;for(int i=0;i<(int)state.sources.size();++i)if(state.sources[i].id==old&&state.sources[i].screen==screen)selected=i;if(selected<0)sourcePreview=false;if(!state.allowedQualities.empty()&&std::find(state.allowedQualities.begin(),state.allowedQualities.end(),settings.quality)==state.allowedQualities.end()){settings.quality=state.allowedQualities.front();persist();}localMessage.clear();localError=false;syncLayout();tray(false);InvalidateRect(h,nullptr,FALSE);return 0;}
+    case WM_STATE:{auto old=selected>=0&&selected<(int)state.sources.size()?state.sources[selected].id:int64_t(-1);bool screen=selected>=0&&selected<(int)state.sources.size()?state.sources[selected].screen:false;auto previousQualities=state.allowedQualities;state=session->snapshot();if(popup==1&&previousQualities!=state.allowedQualities)cancelInput();if((state.phase!=Phase::Sharing&&state.phase!=Phase::AutoPaused))liveFrame.reset();selected=-1;for(int i=0;i<(int)state.sources.size();++i)if(state.sources[i].id==old&&state.sources[i].screen==screen)selected=i;if(selected<0)sourcePreview=false;if(!state.allowedQualities.empty()&&std::find(state.allowedQualities.begin(),state.allowedQualities.end(),settings.quality)==state.allowedQualities.end()){settings.quality=state.allowedQualities.front();persist();}localMessage.clear();localError=false;syncLayout();tray(false);InvalidateRect(h,nullptr,FALSE);return 0;}
     case WM_AUDIO_APPS:{audioLoading=false;std::unique_ptr<std::vector<Process>> apps(reinterpret_cast<std::vector<Process>*>(lp));if(quitting)return 0;std::set<std::wstring> names;for(auto&p:*apps)if(p.pid>4&&p.pid!=GetCurrentProcessId()&&!p.name.empty()){auto name=audioGroup(p.name);names.insert(name);if(!appIcons.count(name)){HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,p.pid);wchar_t path[32768];DWORD len=32768;if(process){if(QueryFullProcessImageNameW(process,0,path,&len)){SHFILEINFOW info{};if(SHGetFileInfoW(path,0,&info,sizeof(info),SHGFI_ICON|SHGFI_LARGEICON))appIcons[name]=info.hIcon;}CloseHandle(process);}}}updateAudioNames(std::vector<std::wstring>(names.begin(),names.end()));return 0;}
     case WM_TRAY:if(lp==WM_LBUTTONDBLCLK||lp==WM_LBUTTONUP)show();if(lp==WM_RBUTTONUP)trayMenu();return 0;
     case WM_QUERYENDSESSION:session->stop();return TRUE;
-    case WM_TIMER:if(smoke){quitting=true;DestroyWindow(h);}else if(wp==8){checkForUpdates(false);}else if(wp==7){if(session&&state.phase==Phase::Sharing&&IsWindowVisible(h)&&!IsIconic(h)){liveFrame=session->preview();InvalidateRect(h,nullptr,FALSE);}}else if(wp==6){KillTimer(h,6);tipVisible=hoverTip>=0;InvalidateRect(h,nullptr,FALSE);}else if(wp==2||wp==4){if(wp==2)syncLayout();InvalidateRect(h,nullptr,FALSE);if(wp==4&&(!motionAllowed||std::none_of(motions.begin(),motions.end(),[](const auto& item){return item.second.from!=item.second.to&&GetTickCount64()-item.second.at<150;})))KillTimer(h,4);}else if(wp==3&&hasLaunch&&!audioLoading)act(33);return 0;
+    case WM_TIMER:if(smoke){quitting=true;DestroyWindow(h);}else if(wp==8){checkForUpdates(false);}else if(wp==7){if(session&&(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused)&&IsWindowVisible(h)&&!IsIconic(h)){liveFrame=session->preview();InvalidateRect(h,nullptr,FALSE);}}else if(wp==6){KillTimer(h,6);tipVisible=hoverTip>=0;InvalidateRect(h,nullptr,FALSE);}else if(wp==2||wp==4){if(wp==2)syncLayout();InvalidateRect(h,nullptr,FALSE);if(wp==4&&(!motionAllowed||std::none_of(motions.begin(),motions.end(),[](const auto& item){return item.second.from!=item.second.to&&GetTickCount64()-item.second.at<150;})))KillTimer(h,4);}else if(wp==3&&hasLaunch&&!audioLoading)act(33);return 0;
     case WM_DESTROY:{quitting=true;NOTIFYICONDATAW n{};n.cbSize=sizeof(n);n.hWnd=h;n.uID=1;Shell_NotifyIconW(NIM_DELETE,&n);PostQuitMessage(0);return 0;}
   }
   static const UINT taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");if(message==taskbarCreated){tray(true);return 0;}
@@ -819,7 +826,7 @@ void uiSelfTest(const std::wstring&output){
     RECT r{};GetClientRect(trayPopup,&r);auto dc=GetDC(trayPopup);auto mem=CreateCompatibleDC(dc);auto bitmap=CreateCompatibleBitmap(dc,r.right,r.bottom);auto previous=SelectObject(mem,bitmap);paintTrayPopup(trayPopup,mem);SelectObject(mem,previous);DeleteDC(mem);ReleaseDC(trayPopup,dc);{Bitmap image(bitmap,nullptr);auto encoder=pngEncoder();image.Save((output+L".tray-menu.png").c_str(),&encoder,nullptr);}DeleteObject(bitmap);
     SendMessageW(trayPopup,WM_KEYDOWN,VK_ESCAPE,0);require(!trayPopup,"Tray menu did not close");}
   auto audioRow=std::find_if(hits.begin(),hits.end(),[](const Hit&h){return h.id==20000;});require(audioRow!=hits.end()&&audioRow->rect.X>=712&&audioRow->rect.GetRight()<=976,"Sound panel is not an independent column");
-  state.phase=Phase::Sharing;state.idleSeconds=-1;state.noViewerSeconds=93;state.observedAt=GetTickCount64();liveFrame=syntheticPreview();syncLayout();
+  state.phase=Phase::Sharing;state.idleSeconds=-1;state.noViewerSeconds=93;state.autoPause=true;state.observedAt=GetTickCount64();liveFrame=syntheticPreview();syncLayout();
   require(uiWidth()==560&&uiHeight()==480,"Compact dimensions incorrect");capturePreview(output+L".compact.png");
   require(std::none_of(hits.begin(),hits.end(),[](const Hit&h){return h.id==7||h.id==45||h.id==22||(h.id>=50&&h.id<20000);}),"Collapsed controller retained video settings controls");
   require(std::any_of(hits.begin(),hits.end(),[](const Hit&h){return h.id==30;}),"Compact microphone missing");
@@ -830,7 +837,7 @@ void uiSelfTest(const std::wstring&output){
   {
     auto hasCaption=[&](const wchar_t*caption){return std::any_of(textRuns.begin(),textRuns.end(),[&](const TextRun&r){return r.value==caption;});};
     state.agoraAccountLabel=L"联调账号";state.budgetText=L"按当前负载预计可用约 4 分钟 · 额度即将耗尽";state.estimatedRemainingSec=240;
-    auto savedViewers=state.viewers;state.viewers=0;state.observedAt=GetTickCount64();capturePreview(output+L".zero-viewers.png");require(hasCaption(L"（93秒后自动停止）")&&!hasCaption(L"无人观看剩余"),"Zero-viewer inline timeout missing");
+    auto savedViewers=state.viewers;state.viewers=0;state.observedAt=GetTickCount64();capturePreview(output+L".zero-viewers.png");require(hasCaption(L"（93秒后自动暂停）")&&!hasCaption(L"无人观看剩余"),"Zero-viewer inline timeout missing");
     require(hasCaption(state.budgetText.c_str())&&std::any_of(tips.begin(),tips.end(),[](const Tip&t){return t.id==9007;}),"Account budget or tooltip missing");
     auto notice=std::find_if(textRuns.begin(),textRuns.end(),[](const TextRun&r){return r.value==L"共享中";});require(notice!=textRuns.end()&&notice->rect.Y==uiHeight()-layout::statusHeight+10,"Sharing status is not in the common footer");
     state.viewers=3;capturePreview(output+L".with-viewers.png");require(std::none_of(tips.begin(),tips.end(),[](const Tip&t){return t.id==9002;}),"Viewers retained automatic-stop hint");state.viewers=savedViewers;capturePreview(output+L".compact.png");
@@ -839,6 +846,10 @@ void uiSelfTest(const std::wstring&output){
     require(GetIconInfo(smallIcon,&info)!=FALSE,"Cannot read small icon");GetObjectW(info.hbmColor,sizeof(bitmap),&bitmap);require(bitmap.bmWidth==24&&bitmap.bmHeight==24,"Tray icon uses the wrong DPI size");DeleteObject(info.hbmColor);DeleteObject(info.hbmMask);refreshWindowIcons(GetDpiForWindow(window));
   }
   require(!tipVisible,"Hints were visible by default");wndProc(window,WM_MOUSEMOVE,0,MAKELPARAM(300,396));require(hoverTip==9002&&!tipVisible,"Countdown hover did not wait for dwell");wndProc(window,WM_TIMER,6,0);require(tipVisible,"Delayed tooltip did not appear");capturePreview(output+L".tooltip.png");wndProc(window,WM_MOUSELEAVE,0,0);require(!tipVisible&&hoverTip==-1,"Hover hint remained after leaving");
+  state.phase=Phase::AutoPaused;state.noViewerSeconds=-1;syncLayout();capturePreview(output+L".auto-paused.png");
+  require(!expanded&&busy()&&std::any_of(textRuns.begin(),textRuns.end(),[](const TextRun&r){return r.value==L"无人观看，已暂停传输";})&&std::any_of(hits.begin(),hits.end(),[](const Hit&h){return h.id==41;}),"Paused controls or end action missing");
+  state.phase=Phase::Ready;state.stoppedSeconds=45;state.idleSeconds=-1;state.observedAt=GetTickCount64();syncLayout();capturePreview(output+L".stopped.png");
+  require(countdownText()==L"00:45","Stopped countdown is not independent");state.stoppedSeconds=-1;state.phase=Phase::Sharing;syncLayout();
   state.idleSeconds=125;state.noViewerSeconds=-1;state.observedAt=GetTickCount64()-2000;require(countdownText()==L"02:03","Idle countdown drift");
   state.idleSeconds=-1;state.noViewerSeconds=1;state.observedAt=GetTickCount64()-2000;require(countdownText()==L"00:00","Countdown did not clamp at zero");
   state.noViewerSeconds=-1;require(countdownText().empty(),"No-deadline sharing was given a false limit");capturePreview(output+L".no-deadline.png");
@@ -884,7 +895,7 @@ void uiSelfTest(const std::wstring&output){
   for(auto&item:std::vector<std::pair<const char*,Color>>{{"success",ui::success},{"warning",ui::warning},{"error",ui::error},{"info",ui::info}})checkRatio(item.first,item.second,canvas,4.5f);
   checkRatio("label/orange",orangeInk,orange,4.5f);
   settings.lowLatency=true;motions[90]=Motion{0,1,GetTickCount64()-75};capturePreview(output+L".switch.png");
-  std::ofstream file{std::filesystem::path(output)};file<<Json{{"aboutDialog",true},{"trayHoverRendering",true},{"updatePrompt",true},{"microphoneSelection",true},{"sharedStatusFooter",true},{"accountBudget",true},{"inlineAutoStop",true},{"framelessWindow",true},{"dpiIcons",true},{"waitingConnection",true},{"connectionPriority",true},{"trayMenuPlacement",true},{"blockedSmallPanel",true},{"customMenus",true},{"selectionPreview",true},{"qualityMenuPolicy",true},{"pointerCancellation",true},{"sourceSelection",true},{"compactHitTargets",true},{"waitingGuard",true},{"reducedMotion",true},{"immediateExpansion",true},{"countdownSemantics",true},{"hoverHints",true},{"independentSoundPanel",true},{"compactControlsHidden",true},{"layoutBounds",true},{"scrollRegions",true},{"titlebarHitTargets",true},{"automaticLayout",true},{"compactAudioInteraction",true},{"audioRefreshCancellation",true},{"previewPresentation",true},{"waitingHasNoTimer",true},{"noManualLayout",true},{"contrast",ratios}}.dump(2);
+  std::ofstream file{std::filesystem::path(output)};file<<Json{{"aboutDialog",true},{"trayHoverRendering",true},{"updatePrompt",true},{"microphoneSelection",true},{"sharedStatusFooter",true},{"accountBudget",true},{"inlineAutoPause",true},{"autoPaused",true},{"stoppedCountdown",true},{"endSession",true},{"framelessWindow",true},{"dpiIcons",true},{"waitingConnection",true},{"connectionPriority",true},{"trayMenuPlacement",true},{"blockedSmallPanel",true},{"customMenus",true},{"selectionPreview",true},{"qualityMenuPolicy",true},{"pointerCancellation",true},{"sourceSelection",true},{"compactHitTargets",true},{"waitingGuard",true},{"reducedMotion",true},{"immediateExpansion",true},{"countdownSemantics",true},{"hoverHints",true},{"independentSoundPanel",true},{"compactControlsHidden",true},{"layoutBounds",true},{"scrollRegions",true},{"titlebarHitTargets",true},{"automaticLayout",true},{"compactAudioInteraction",true},{"audioRefreshCancellation",true},{"previewPresentation",true},{"waitingHasNoTimer",true},{"noManualLayout",true},{"contrast",ratios}}.dump(2);
 }
 void selfTest(const std::wstring& output){
   Json manifest={{"product","XgoatCast"},{"version","0.0.1-beta.2"},{"downloadUrl","https://example.com/setup.exe"},{"releasePageUrl","https://cast.xgoat.top/downloads.html"},{"notes","版本更新"}};

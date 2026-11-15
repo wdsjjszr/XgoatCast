@@ -239,19 +239,28 @@ export const api = {
     quality?: string,
     clientId?: string,
     lowLatency?: boolean,
+    autoResume?: boolean,
   ): Promise<{ ok: boolean }> {
     return request('/api/share/start?t=' + encodeURIComponent(token), {
       method: 'POST',
-      body: JSON.stringify({ quality, clientId, lowLatency }),
+      body: JSON.stringify({ quality, clientId, lowLatency, autoResume }),
     });
   },
 
   /** 发布端停止共享（替代原 WebSocket sharing_stopped） */
-  stopSharing(token: string): Promise<{ ok: boolean }> {
+  stopSharing(token: string, clientId: string): Promise<{ ok: boolean }> {
     return request('/api/share/stop?t=' + encodeURIComponent(token), {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ clientId }),
     });
+  },
+
+  endSharing(token: string, clientId: string): Promise<{ ok: boolean }> {
+    return request('/api/share/end?t=' + encodeURIComponent(token), { method: 'POST', body: JSON.stringify({ clientId }) });
+  },
+
+  heartbeat(token: string, clientId: string): Promise<{ ok: boolean }> {
+    return request('/api/share/heartbeat?t=' + encodeURIComponent(token), { method: 'POST', body: JSON.stringify({ clientId }) });
   },
 
   reportShareTelemetry(payload: ShareTelemetryPayload | RtcDiagnosticPayload): Promise<{ ok: boolean }> {

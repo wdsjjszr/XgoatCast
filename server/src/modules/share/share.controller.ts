@@ -98,7 +98,9 @@ export class ShareController {
     @Body('quality') quality?: string,
     @Body('clientId') clientId?: string,
     @Body('lowLatency') lowLatency?: boolean,
+    @Body('autoResume') autoResume?: boolean,
   ) {
+    if (autoResume !== undefined && typeof autoResume !== 'boolean') throw new HttpException('invalid autoResume', HttpStatus.BAD_REQUEST);
     const serverId = req.session.spaceId || '';
     if (this.db.getServer(serverId)?.platform === 'heychat' && this.db.getServer(serverId)?.agoraAccountPoolEnabled && !req.session.agoraAccountId) {
       throw new HttpException('请先获取发布凭证再开始共享', HttpStatus.CONFLICT);
@@ -114,6 +116,7 @@ export class ShareController {
       req.session.token,
       clientId,
       lowLatency,
+      autoResume,
     );
     if (session) {
       this.sessionService.updateQuality(session.id, quality);
@@ -132,11 +135,20 @@ export class ShareController {
     return { ok: !!session };
   }
 
+  @Post('end')
+  @UseGuards(ShareTokenGuard)
+  end(@Req() req: any) {
+    this.sessionService.endSession(req.session.id, 'publisher_ended');
+    return { ok: true };
+  }
+
   /** Desktop capture owns its heartbeat independently from the browser control page. */
   @Post('heartbeat')
   @UseGuards(ShareTokenGuard)
   heartbeat(@Req() req: any, @Body('clientId') clientId?: string) {
-    if (!clientId || req.session.publisherClientId !== clientId || req.session.status !== 'active') {
+    if (!clientId || req.session.publisherClientId !== clientId ||
+        !(['active', 'auto_paused'].includes(req.session.status) ||
+          (req.session.status === 'grace' && req.session.graceReason === 'heartbeat'))) {
       return { ok: false };
     }
     return { ok: this.sessionService.heartbeat(req.session.token) };

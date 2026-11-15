@@ -87,6 +87,10 @@ export class UpdateServerDto {
   @IsNumber()
   noViewerTimeoutSec?: number;
 
+  @IsOptional()
+  @IsNumber()
+  stoppedTimeoutSec?: number;
+
   /** 是否允许共享者开启低延迟模式（1=允许，0=不允许） */
   @IsOptional()
   @IsNumber()

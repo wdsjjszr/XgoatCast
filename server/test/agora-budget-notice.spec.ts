@@ -22,6 +22,8 @@ test('quota notice distinguishes 15/5 minute warnings, zero and unknown or idle 
   assert.match(render(0), /约 0 分钟.*额度即将耗尽/);
   assert.match(render(null, { remainingStandardMinutes: null }), /余量未知/);
   assert.match(render(null), /暂无在线媒体记录/);
+  assert.match(render(null, { status: 'auto_paused', rtcUsageRate: 0 }), /已暂停，当前不消耗 RTC 用量/);
+  assert.match(render(600, { status: 'auto_paused', rtcUsageRate: 5 }), /预计可用约 10 分钟/);
   assert.doesNotMatch(render(null), /Infinity|NaN|无限/);
   assert.equal(render(600, { agoraAccountLabel: '' }), '');
 });

@@ -157,7 +157,7 @@ export class SessionSseController implements OnModuleInit {
 
     // ===== 发布端心跳保活 =====
     let keepalive: ReturnType<typeof setInterval> | null = null;
-    if (resolvedRole === 'publisher' && passive !== '1') {
+    if (resolvedRole === 'publisher' && passive !== '1' && session.platform !== 'heychat') {
       // 连接建立时立即更新心跳（同时触发 GRACE 恢复）
       this.sessionService.heartbeat(token);
 
@@ -220,6 +220,8 @@ export class SessionSseController implements OnModuleInit {
       viewerCount: this.countViewers(sessionId),
       publisherClientId: session.publisherClientId,
       idleRemainingSec: info.idleRemainingSec,
+      stoppedRemainingSec: info.stoppedRemainingSec,
+      graceReason: info.graceReason,
       noViewerRemainingSec: info.noViewerRemainingSec,
       lowLatency: session.lowLatency,
       agoraAccountLabel: info.agoraAccountLabel,

@@ -4,6 +4,7 @@ import type { AgoraBudget } from '../agora/agora-usage.service';
 export enum SessionStatus {
   PENDING = 'pending',
   ACTIVE = 'active',
+  AUTO_PAUSED = 'auto_paused',
   GRACE = 'grace',
   ENDED = 'ended',
 }
@@ -44,7 +45,7 @@ export interface ShareSession {
   graceStartedAt: number | null;
   /** GRACE 状态的原因 */
   graceReason: GraceReason;
-  /** 最后一次有观众的时间戳（用于无人观看自动结束，null 表示暂不计时） */
+  /** 无人计时检查点（黑盒自动暂停，其他平台自动结束） */
   lastViewerAt: number | null;
   /** 第一个点击开始共享的客户端 ID（只有此人可恢复共享） */
   publisherClientId?: string;
@@ -106,6 +107,7 @@ export function getVideoCoefficient(tier: string, lowLatency: boolean): number {
 }
 
 export interface SessionInfo extends Partial<AgoraBudget> {
+  graceReason?: GraceReason;
   rtcStandardSeconds?: number | null;
   usageEstimateStatus?: string;
   id: string;
@@ -137,7 +139,8 @@ export interface SessionInfo extends Partial<AgoraBudget> {
   publisherClientId?: string;
   /** 未共享屏幕倒计时剩余秒数（PENDING / GRACE 状态） */
   idleRemainingSec?: number;
-  /** 无人观看自动结束剩余秒数 */
+  stoppedRemainingSec?: number;
+  /** 无人观看倒计时，黑盒为自动暂停 */
   noViewerRemainingSec?: number;
   /** true=低延迟模式(rtc)，false=极速直播(默认) */
   lowLatency: boolean;

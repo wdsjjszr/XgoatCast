@@ -91,11 +91,12 @@ struct PreviewFrame { int width=0,height=0; ULONGLONG observedAt=0; std::vector<
 struct MicrophoneDevice { std::string id; std::wstring name; };
 struct Microphones { std::vector<MicrophoneDevice> devices; std::wstring defaultName,error; std::string selected; };
 constexpr UINT WM_MICROPHONES = WM_APP+5;
-enum class Phase { Idle, Loading, Ready, Starting, Sharing, Stopping, Failed };
+enum class Phase { Idle, Loading, Ready, Starting, Sharing, AutoPaused, Stopping, Failed };
 struct Snapshot {
   Phase phase = Phase::Idle;
   std::wstring message = L"从网页进入共享，无需登录";
-  int viewers=0, idleSeconds=-1, noViewerSeconds=-1;
+  int viewers=0, idleSeconds=-1, stoppedSeconds=-1, noViewerSeconds=-1;
+  bool autoPause=false;
   ULONGLONG observedAt=0,serverObservedAt=0;
   std::wstring room;
   std::wstring agoraAccountLabel, budgetText, budgetDetail;
@@ -112,6 +113,7 @@ class Session {
   void refresh();
   void start(Source source, Settings settings);
   void stop();
+  void end();
   Snapshot snapshot();
   std::shared_ptr<const PreviewFrame> preview();
   void updateAudio(Settings settings);

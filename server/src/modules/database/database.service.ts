@@ -46,6 +46,7 @@ export interface ServerRecord {
   allowedQualities: string; // JSON array
   triggerWords: string;
   idleTimeoutSec: number;
+  stoppedTimeoutSec?: number;
   heartbeatIntervalSec: number;
   noViewerTimeoutSec: number;
   publicDomain: string;
@@ -304,6 +305,10 @@ export class DatabaseService implements OnModuleDestroy {
 
     // Check and add open_id column if it doesn't exist
     const columns = this.db.prepare("PRAGMA table_info(servers)").all() as any[];
+    if (!columns.some(c => c.name === 'stopped_timeout_sec')) {
+      this.db.exec(`ALTER TABLE servers ADD COLUMN stopped_timeout_sec INTEGER NOT NULL DEFAULT 60;
+        UPDATE servers SET stopped_timeout_sec = idle_timeout_sec`);
+    }
     if (!columns.some(c => c.name === 'open_id')) {
       this.db.exec(`ALTER TABLE servers ADD COLUMN open_id TEXT NOT NULL DEFAULT ''`);
       this.logger.log('Added open_id column to servers table');
@@ -999,6 +1004,7 @@ export class DatabaseService implements OnModuleDestroy {
       allowedQualities: row.allowed_qualities,
       triggerWords: row.trigger_words,
       idleTimeoutSec: row.idle_timeout_sec,
+      stoppedTimeoutSec: row.stopped_timeout_sec,
       heartbeatIntervalSec: row.heartbeat_interval_sec,
       noViewerTimeoutSec: row.no_viewer_timeout_sec,
       publicDomain: row.public_domain,
@@ -1097,6 +1103,7 @@ export class DatabaseService implements OnModuleDestroy {
       now,
       now,
     );
+    if (platform === 'heychat') this.updateServer(spaceId, { noViewerTimeoutSec: 30 });
     return this.getServer(spaceId)!;
   }
 
@@ -1118,7 +1125,7 @@ export class DatabaseService implements OnModuleDestroy {
     'password_hash', 'bound', 'status',
     'agora_app_id', 'agora_app_certificate', 'agora_token_expire_sec', 'agora_account_pool_enabled',
     'allowed_qualities', 'trigger_words',
-    'idle_timeout_sec', 'heartbeat_interval_sec', 'no_viewer_timeout_sec',
+    'idle_timeout_sec', 'stopped_timeout_sec', 'heartbeat_interval_sec', 'no_viewer_timeout_sec',
     'public_domain', 'allow_low_latency', 'allow_quality_preference',
     'rebound_at', 'bind_token', 'bind_token_expires',
     'server_secret',

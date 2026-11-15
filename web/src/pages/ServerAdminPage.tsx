@@ -632,17 +632,24 @@ function ServerConfigPanel({ platform, serverId }: { platform: Platform; serverI
         </div>
       </ConfigSection>
 
-      <ConfigSection title="会话关闭时间" desc="控制共享链接自动关闭的时间，最长 600 秒">
+      <ConfigSection title="会话计时" desc="各计时独立生效，范围 10～600 秒">
         <Field
-          label="停止共享关闭时间（秒）"
-          hint="如果未开始共享，或共享被停止，多长时间后关闭共享链接，最长600秒。"
+          label={config.platform === 'heychat' ? '未开始 / 异常恢复等待（秒）' : '停止共享关闭时间（秒）'}
+          hint={config.platform === 'heychat' ? '等待首次开始或心跳异常恢复，超时后结束会话。' : '未开始或停止共享后，等待多久关闭共享链接。'}
           type="number"
           value={String(config.idleTimeoutSec)}
           onChange={(v) => update(['idleTimeoutSec'], Number(v))}
         />
+        {config.platform === 'heychat' && <Field
+          label="主动停止后结束等待（秒）"
+          hint="停止共享会关闭采集；倒计时内可手动重新选择画面，观众加入不会自动恢复。"
+          type="number"
+          value={String(config.stoppedTimeoutSec)}
+          onChange={(v) => update(['stoppedTimeoutSec'], Number(v))}
+        />}
         <Field
-          label="无人观看关闭时间（秒）"
-          hint="共享无观众观看，多长时间后关闭共享链接，最长600秒。"
+          label={config.platform === 'heychat' ? '无人观看自动暂停（秒）' : '无人观看关闭时间（秒）'}
+          hint={config.platform === 'heychat' ? '暂停传输并保留屏幕选择，有人加入后自动恢复；不会结束观看链接。' : '共享无观众观看，多长时间后关闭共享链接，最长600秒。'}
           type="number"
           value={String(config.noViewerTimeoutSec)}
           onChange={(v) => update(['noViewerTimeoutSec'], Number(v))}

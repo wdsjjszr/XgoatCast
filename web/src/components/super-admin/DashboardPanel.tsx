@@ -80,6 +80,7 @@ function formatPercent(value: number): string {
 function reasonLabel(reason: string): string {
   const labels: Record<string, string> = {
     stopped: '共享者停止', stopped_timeout: '停止后恢复超时',
+    publisher_ended: '共享者立即结束',
     heartbeat_timeout: '共享端心跳超时', no_viewer_timeout: '长时间无人观看',
     max_age: '达到最长时限', not_started_timeout: '等待启动超时',
     server_deleted: '服务器删除', unknown: '未知原因',

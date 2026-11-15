@@ -14,7 +14,7 @@
       <h2>1. 调起客户端</h2>
       <div class="status"><i id="publishDot" class="dot"></i><span id="publishText">正在创建测试会话…</span></div>
       <button id="launch" class="primary" disabled>调起 Windows 客户端</button>
-      <div class="row"><button id="newSession">新建测试会话</button><button id="stop">停止测试共享</button></div>
+      <div class="row"><button id="newSession">新建测试会话</button><button id="stop">停止测试共享</button><button id="end">停止并结束会话</button></div>
       <code id="uri">等待生成调起地址</code>
       <p class="hint">首次启动客户端会弹出「启用网页唤起」。启用后浏览器会询问是否打开 XgoatCast；画质、屏幕或窗口都在客户端内选择。</p>
       <p class="hint warning">此页只监听本机，不会显示或下发 App Certificate。关闭服务后内存会话立即消失。</p>
@@ -29,17 +29,37 @@
     </section>
   </div>
 </main><script src="/agora-sdk.js"></script><script>
-  const $=id=>document.getElementById(id);let current=null,client=null,watching=false;
+  const $=id=>document.getElementById(id);let current=null,client=null,watching=false,stream=null,joining=false,viewerUid;
   const clientId=sessionStorage.getItem('xc_native_test_cid')||crypto.randomUUID();sessionStorage.setItem('xc_native_test_cid',clientId);
+  const viewerId=crypto.randomUUID();
   function launchUri(){const p=new URLSearchParams({server:location.origin,t:current.token,cid:clientId});return 'xgoatcast://share?'+p}
   async function api(path,options){const response=await fetch(path,options);const value=await response.json();if(!response.ok)throw Error(value.message||'请求失败');return value}
-  async function create(){if(watching)await leave();current=await api('/test/session',{method:'POST'});$('launch').disabled=false;$('uri').textContent=launchUri();render(await api('/test/session'))}
-  function render(s){current={...current,...s};const active=s.status==='active';$('publishDot').className='dot '+(active?'ok':'');$('publishText').textContent=active?'客户端正在共享':'客户端尚未开始共享';$('watch').disabled=!active;const requests=s.requests?` · 客户端请求 info ${s.requests.info} / preview ${s.requests.preview} / token ${s.requests.token}`:'';$('meta').textContent='频道：'+s.channel+' · 模式：'+(s.lowLatency?'低延迟 RTC':'直播')+' · '+(s.quality||'等待客户端选择')+requests}
-  async function poll(){try{render(await api('/test/session'))}catch(e){$('publishDot').className='dot bad';$('publishText').textContent=e.message}}
-  async function leave(){if(client){await client.leave();client.removeAllListeners();client=null}watching=false;$('video').textContent='远端画面会显示在这里';$('watch').textContent='加入观看';$('watchDot').className='dot';$('watchText').textContent='等待客户端开始共享'}
+  async function create(){await leave();viewerUid=undefined;current=await api('/test/session',{method:'POST'});$('launch').disabled=false;$('uri').textContent=launchUri();render(await api('/test/session'))}
+  function render(s){current={...current,...s};const active=s.status==='active';$('publishDot').className='dot '+(active?'ok':'');$('publishText').textContent=active?'客户端正在共享':s.status==='auto_paused'?'无人观看，已暂停传输；加入观看可唤醒':s.status==='grace'?`已停止采集，${s.stoppedRemainingSec} 秒后结束`:s.status==='ended'?'会话已结束':'客户端尚未开始共享';$('watch').disabled=s.status==='ended';const requests=s.requests?` · 请求 info ${s.requests.info} / preview ${s.requests.preview} / token ${s.requests.token}`:'';$('meta').textContent='频道：'+s.channel+' · 模式：'+(s.lowLatency?'低延迟 RTC':'直播')+' · '+(s.quality||'等待客户端选择')+requests;void syncRtc().catch(showError)}
+  async function poll(){try{render(await api('/test/session'))}catch(e){showError(e)}}
+  async function leaveRtc(){const previous=client;client=null;if(previous){previous.removeAllListeners();await previous.leave()}$('video').textContent='远端画面会显示在这里'}
+  async function leave(){watching=false;stream?.close();stream=null;await leaveRtc();$('watch').textContent='加入观看';$('watchDot').className='dot';$('watchText').textContent='等待客户端开始共享'}
+  function showError(e){$('watchDot').className='dot bad';$('watchText').textContent=e.message}
+  async function syncRtc(){
+    if(!watching||!current||joining)return;
+    if(current.status==='ended'){await leave();return}
+    if(current.status!=='active'){await leaveRtc();$('watchText').textContent=current.status==='auto_paused'?'已发送唤醒，等待客户端恢复':'等待共享者手动开始';return}
+    if(client)return;joining=true;let next;
+    try{
+      const state=current,auth=await api('/api/share/token?t='+encodeURIComponent(state.token)+'&role=subscriber'+(viewerUid?'&uid='+viewerUid:''));
+      if(!watching||current.token!==state.token||current.status!=='active')return;
+      viewerUid=auth.uid;next=AgoraRTC.createClient({mode:state.lowLatency?'rtc':'live',codec:'vp8'});client=next;
+      if(!state.lowLatency)await next.setClientRole('audience',{level:1});
+      next.on('user-published',async(user,type)=>{try{await next.subscribe(user,type);if(client!==next)return;if(type==='video'){$('video').textContent='';const holder=document.createElement('div');$('video').append(holder);user.videoTrack.play(holder)}if(type==='audio')user.audioTrack.play()}catch(e){showError(e)}});
+      next.on('user-unpublished',(_user,type)=>{if(type==='video')$('video').textContent='远端视频已停止'});
+      await next.join(auth.appId,auth.channel,auth.token,auth.uid);
+      if(!watching||current.status!=='active'||client!==next){await next.leave();return}
+      $('watchDot').className='dot ok';$('watchText').textContent='已加入，等待远端轨道';
+    }catch(e){await leaveRtc();throw e}finally{joining=false}
+  }
   $('launch').onclick=()=>{const uri=launchUri();$('uri').textContent=uri;location.href=uri};
-  $('newSession').onclick=()=>create().catch(e=>alert(e.message));
-  $('stop').onclick=async()=>{if(!current)return;await api('/api/share/stop?t='+encodeURIComponent(current.token),{method:'POST'});await leave();await poll()};
-  $('watch').onclick=async()=>{try{if(watching){await leave();return}const state=await api('/test/session');if(state.status!=='active')throw Error('客户端还没有开始共享');const auth=await api('/api/share/token?t='+encodeURIComponent(current.token)+'&role=subscriber');client=AgoraRTC.createClient({mode:state.lowLatency?'rtc':'live',codec:'vp8'});if(!state.lowLatency)await client.setClientRole('audience');client.on('user-published',async(user,type)=>{await client.subscribe(user,type);if(type==='video'){ $('video').textContent='';const holder=document.createElement('div');$('video').append(holder);user.videoTrack.play(holder)}if(type==='audio')user.audioTrack.play()});client.on('user-unpublished',(user,type)=>{if(type==='video')$('video').textContent='远端视频已停止'});await client.join(auth.appId,auth.channel,auth.token,auth.uid);watching=true;$('watch').textContent='停止观看';$('watchDot').className='dot ok';$('watchText').textContent='已加入，等待远端轨道'}catch(e){await leave();$('watchDot').className='dot bad';$('watchText').textContent=e.message}}
-  create().catch(e=>{$('publishDot').className='dot bad';$('publishText').textContent=e.message});setInterval(poll,1000);addEventListener('beforeunload',()=>{if(client)client.leave()});
+  $('newSession').onclick=()=>create().catch(showError);
+  for(const action of ['stop','end'])$(action).onclick=async()=>{try{if(!current)return;await api('/api/share/'+action+'?t='+encodeURIComponent(current.token),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId})});await poll()}catch(e){showError(e)}};
+  $('watch').onclick=async()=>{try{if(watching){await leave();return}watching=true;$('watch').textContent='停止观看';stream=new EventSource('/api/share/stream?t='+encodeURIComponent(current.token)+'&vid='+viewerId);stream.addEventListener('session_state',e=>render(JSON.parse(e.data)));stream.addEventListener('session_ended',()=>{void leave()});await syncRtc()}catch(e){showError(e)}};
+  create().catch(showError);setInterval(poll,1000);addEventListener('beforeunload',()=>{stream?.close();if(client)client.leave()});
 </script></body></html>

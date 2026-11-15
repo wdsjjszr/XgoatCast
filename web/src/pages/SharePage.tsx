@@ -59,6 +59,9 @@ export default function SharePage() {
   const [activeShareToken, setActiveShareToken] = useState(getActiveShare);
   const [starting, setStarting] = useState(false);
   const startingRef = useRef(false);
+  const actionRef = useRef(0);
+  const autoTransitionRef = useRef(false);
+  const [rtcSync, setRtcSync] = useState(0);
   const [shareError, setShareError] = useState('');
   const [desktopRequested, setDesktopRequested] = useState(() => sessionStorage.getItem('xgoatcast_desktop') === token);
   const [desktopAttempt, setDesktopAttempt] = useState<{ id: string; token: string } | null>(null);
@@ -77,7 +80,9 @@ export default function SharePage() {
   }, []);
 
   const socket = useSessionSSE(token, 'publisher', desktopRequested);
-  const desktopSharing = desktopRequested && socket.status === 'active' && socket.publisherClientId === clientId;
+  const desktopSharing = desktopRequested && ['active', 'auto_paused'].includes(socket.status || '') && socket.publisherClientId === clientId;
+  const latestSocketRef = useRef(socket);
+  latestSocketRef.current = socket;
   useEffect(() => {
     if (!desktopRequested || !desktopAttempt || desktopAttempt.token !== token || desktopSharing || socket.ended) return;
     let disposed = false;
@@ -99,7 +104,8 @@ export default function SharePage() {
   }, [desktopRequested, desktopAttempt, desktopSharing, socket.ended, token, clientId]);
   const screenShare = useScreenShare(token, () => {
     setMicrophoneEnabled(false);
-    socket.stopSharing();
+    actionRef.current++;
+    void socket.stopSharing(clientId).catch(e => setShareError(e.message));
   }, clientId);
   const stopRef = useRef(screenShare.stop);
   stopRef.current = screenShare.stop;
@@ -148,12 +154,13 @@ export default function SharePage() {
 
 	  // 未共享屏幕倒计时：基于绝对时间戳，避免后台/节能模式下 setTimeout 节流导致与服务器不同步
   useEffect(() => {
-    if (socket.idleRemainingSec != null && socket.idleRemainingSec > 0) {
-      idleDeadlineRef.current = Date.now() + socket.idleRemainingSec * 1000;
+    const seconds = socket.stoppedRemainingSec ?? socket.idleRemainingSec;
+    if (seconds != null) {
+      idleDeadlineRef.current = Date.now() + seconds * 1000;
     } else {
       idleDeadlineRef.current = null;
     }
-  }, [socket.idleRemainingSec]);
+  }, [socket.idleRemainingSec, socket.stoppedRemainingSec, socket.status]);
 
   useEffect(() => {
     if (idleDeadlineRef.current == null) {
@@ -167,7 +174,7 @@ export default function SharePage() {
     tick();
     const id = setInterval(tick, 250);
     return () => clearInterval(id);
-  }, [socket.idleRemainingSec]);
+  }, [socket.idleRemainingSec, socket.stoppedRemainingSec, socket.status]);
 
   // 无人观看自动结束倒计时（同样基于绝对时间戳）
   useEffect(() => {
@@ -209,6 +216,7 @@ export default function SharePage() {
       return;
     }
     startingRef.current = true;
+    const action = ++actionRef.current;
     setStarting(true);
     try {
       const result = await screenShare.publish({
@@ -218,8 +226,14 @@ export default function SharePage() {
         optimizationMode: info?.allowQualityPreference ? optimizationMode : 'motion',
         bitrateConfig: info?.qualityBitrates?.[QUALITY_OPTIONS[qualityIdx].key],
       });
+      if (action !== actionRef.current || latestSocketRef.current.ended) { await screenShare.stop(); return; }
       if (result.success) {
         const resp = await socket.startSharing(QUALITY_OPTIONS[qualityIdx].key, clientId, lowLatency);
+        if (action !== actionRef.current || latestSocketRef.current.ended) {
+          await screenShare.stop();
+          if (!latestSocketRef.current.ended) await socket.stopSharing(clientId);
+          return;
+        }
         if (resp.ok) {
           setActiveShare(token);
           setActiveShareToken(token);
@@ -239,6 +253,8 @@ export default function SharePage() {
           ...getClientEnvironment(),
         }).catch(() => {});
       }
+    } catch (e: any) {
+      setShareError(e.message || '共享操作失败，请重试。');
     } finally {
       startingRef.current = false;
       setStarting(false);
@@ -277,12 +293,67 @@ export default function SharePage() {
   }, [desktopSharing, desktopRequested, socket.status, socket.ended, token]);
 
   const handleStop = useCallback(async () => {
-    await screenShare.stop();
+    actionRef.current++;
+    const stopped = screenShare.stop();
     setMicrophoneEnabled(false);
-    socket.stopSharing();
+    try { await socket.stopSharing(clientId); }
+    catch (e: any) { setShareError(e.message || '停止通知失败，请重试。'); }
+    await stopped;
     clearActiveShare(token);
     setActiveShareToken(getActiveShare());
-  }, [screenShare, socket, token]);
+  }, [screenShare, socket, token, clientId]);
+
+  const handleEnd = async () => {
+    actionRef.current++;
+    const stopped = screenShare.stop('END');
+    setMicrophoneEnabled(false);
+    try { await socket.endSharing(clientId); }
+    catch (e: any) { setShareError(e.message || '结束会话失败，请重试。'); }
+    await stopped;
+    clearActiveShare(token);
+    setActiveShareToken(getActiveShare());
+  };
+
+  useEffect(() => {
+    if (!screenShare.isSharing || desktopRequested) return;
+    if (socket.status !== 'auto_paused' || autoTransitionRef.current ||
+        (screenShare.isPaused && socket.viewerCount === 0)) return;
+    autoTransitionRef.current = true;
+    const action = actionRef.current;
+    void (async () => {
+      try {
+        if (socket.viewerCount === 0) await screenShare.pause();
+        else {
+          if (screenShare.isPaused && !await screenShare.resume()) return;
+          const latest = latestSocketRef.current;
+          if (action !== actionRef.current || latest.ended || latest.status !== 'auto_paused') return;
+          if (latest.viewerCount === 0) { await screenShare.pause(); return; }
+          const response = await socket.startSharing(QUALITY_OPTIONS[qualityIdx!].key, clientId, lowLatency, true);
+          if (!response.ok && action === actionRef.current) {
+            const latest = await api.getShareInfo(token);
+            if (latest.status === 'auto_paused' && latest.viewerCount === 0) { await screenShare.pause(); return; }
+            throw new Error(response.message || '自动恢复未确认，请重新开始共享。');
+          }
+        }
+      } catch (e: any) {
+        if (action !== actionRef.current) return;
+        setShareError(e.message || '暂停或恢复失败，请重新开始共享。');
+        await handleStop();
+      } finally {
+        autoTransitionRef.current = false;
+        setRtcSync(value => value + 1);
+      }
+    })();
+  }, [socket.status, socket.viewerCount, socket.graceReason, socket.ended, screenShare.isSharing, screenShare.isPaused, desktopRequested, rtcSync]);
+
+  useEffect(() => {
+    if (desktopRequested || socket.status !== 'grace' || socket.graceReason !== 'stopped' || !screenShare.isSharing) return;
+    actionRef.current++;
+    void screenShare.stop('STOP');
+    clearActiveShare(token);
+    setActiveShareToken(getActiveShare());
+    // A stopped-state transition cancels capture; a new manual capture in that state must be allowed to start.
+  }, [socket.status, socket.graceReason, desktopRequested, token]);
 
   useEffect(() => {
     const handler = () => { stopRef.current(); };
@@ -292,6 +363,7 @@ export default function SharePage() {
 
   useEffect(() => {
     if (socket.ended) {
+      actionRef.current++;
       screenShare.stop();
       setMicrophoneEnabled(false);
       clearActiveShare(token);
@@ -368,7 +440,9 @@ export default function SharePage() {
           <div className="relative w-full aspect-video rounded-xl bg-[#24292b] overflow-hidden flex items-center justify-center video-stage">
             {screenShare.isSharing ? <div ref={screenShare.setLocalPreviewContainer} className="absolute inset-0 w-full h-full" /> : <div className="text-center px-4"><MonitorUp size={54} strokeWidth={1.2} className="mx-auto text-[#c9d1cd]" /><p className="mt-5 text-[#d9e0dc] text-sm">选择屏幕后将在这里预览</p></div>}
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted"><span className="inline-flex items-center gap-2"><span className={cn('w-2 h-2 rounded-full', screenShare.isSharing || desktopSharing ? 'bg-green-500' : 'bg-[#a0a7a1]')} />{screenShare.isSharing || desktopSharing ? '正在共享屏幕' : '尚未开始共享'}</span><span>{socket.viewerCount} 人观看</span></div>
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted"><span className="inline-flex items-center gap-2"><span className={cn('w-2 h-2 rounded-full', screenShare.isSharing || desktopSharing ? 'bg-green-500' : 'bg-[#a0a7a1]')} />{socket.status === 'auto_paused' ? '已暂停传输' : screenShare.isSharing || desktopSharing ? '正在共享屏幕' : '尚未开始共享'}</span><span>{socket.viewerCount} 人观看</span></div>
+          {socket.status === 'auto_paused' && <p role="status" className="mt-3 text-sm text-[#895216]">无人观看，已暂停传输；有人加入将自动恢复。屏幕选择和采集授权仍保留。</p>}
+          {socket.graceReason === 'stopped' && socket.status === 'grace' && <p role="status" className="mt-3 text-sm text-muted">已停止采集，{idleCountdown ?? '…'} 秒后结束会话；观众加入不会自动恢复。</p>}
         </div>
         <div className="space-y-5">
         {/* 共享设置 */}
@@ -442,6 +516,7 @@ export default function SharePage() {
               <p id="microphone-description" className="mt-2 text-[11px] leading-relaxed text-muted">默认关闭。开启后，浏览器共享时会将麦克风声音与屏幕音频一起传给观众；共享过程中也可切换。</p>
             </div>
           )}
+
           <fieldset className="mt-3 border-t border-[#e1e4dd] pt-4" disabled={starting || screenShare.isSharing || desktopSharing || socket.ended || lockedByOther}>
             <legend className="sr-only">浏览器共享画质</legend>
             <label htmlFor="share-quality" className="mb-2.5 flex items-center gap-2 text-sm font-medium">
@@ -536,6 +611,8 @@ export default function SharePage() {
             </button>
           )}
 
+          {!socket.ended && !lockedByOther && <button type="button" onClick={() => void handleEnd()} className="w-full py-3 rounded-lg border border-[#cbd0c7] bg-[#fffefd] text-sm text-[#a0342d] hover:bg-[#f3f4f0]">停止并结束会话</button>}
+
           {!screenShare.isSharing && !socket.ended && !lockedByOther && !activeElsewhere && (
             <div className="mt-3 space-y-2">
               <button onClick={handleDesktopStart} disabled={starting || allowedQualities.length === 0 || desktopSharing}
@@ -561,7 +638,7 @@ export default function SharePage() {
             <div>
               <p className="text-sm text-yellow-300 font-medium">当前无人观看</p>
               <p className="text-xs text-muted mt-0.5">
-                {noViewerCountdown} 秒后将自动结束直播以节省费用，有人观看即取消
+                {noViewerCountdown} 秒后将{info?.platform === 'heychat' ? '自动暂停传输，有人加入自动恢复' : '自动结束直播以节省费用，有人观看即取消'}
               </p>
             </div>
           </div>

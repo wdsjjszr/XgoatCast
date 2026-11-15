@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function load(sdk: any, api: any = {}) {
+function load(sdk: any, api: any = {}, onTrackEnded?: () => void) {
   const module = { exports: {} as any };
   const errors: string[] = [];
   const source = readFileSync(join(__dirname, '../../web/src/hooks/useScreenShare.ts'), 'utf8');
@@ -30,16 +30,17 @@ function load(sdk: any, api: any = {}) {
     },
   };
   vm.runInNewContext(code, context);
-  return { hook: module.exports.useScreenShare('test-token'), errors };
+  return { hook: module.exports.useScreenShare('test-token', onTrackEnded), errors };
 }
 function fixture() {
   let closed = 0;
   let left = 0;
-  const video = { stop() {}, close() { closed++; }, on() {}, removeAllListeners() {} };
-  const client = { on() {}, removeAllListeners() {}, async setClientRole() {}, async join() {}, async publish() {}, async leave() { left++; } };
+  const events: Record<string, () => void> = {};
+  const video = { stop() {}, close() { closed++; }, on(name: string, fn: () => void) { events[name] = fn; }, removeAllListeners() {} };
+  const client = { on() {}, removeAllListeners() {}, async setClientRole() {}, async join() {}, async publish() {}, async unpublish() {}, async leave() { left++; } };
   const sdk = { setLogLevel() {}, createScreenVideoTrack: async () => video, createClient: () => client };
   const api = { getShareToken: async () => ({ appId: 'id', channel: 'channel', token: 'token', uid: 1 }) };
-  return { sdk, api, client, counts: () => ({ closed, left }) };
+  return { sdk, api, client, events, counts: () => ({ closed, left }) };
 }
 test('missing SDK is a recoverable publish error, not a module crash', async () => {
   const { hook } = load(undefined);
@@ -103,6 +104,35 @@ test('credential errors release the captured screen and preserve the server mess
   assert.equal(result.success, false);
   assert.match(result.message, /Agora App ID/);
   assert.equal(f.counts().closed, 1);
+});
+
+test('auto-pause leaves RTC but retains capture, then resumes with the same UID without asking for a new screen', async () => {
+  const f = fixture(); let captures = 0; const uids: unknown[] = [];
+  const capture = f.sdk.createScreenVideoTrack; f.sdk.createScreenVideoTrack = async () => { captures++; return capture(); };
+  const credentials = f.api.getShareToken; (f.api as any).getShareToken = async (_token: string, _role: string, uid: unknown) => { uids.push(uid); return credentials(); };
+  const { hook } = load(f.sdk, f.api);
+  await hook.publish({ lowLatency: false }); await hook.pause();
+  assert.equal(f.counts().closed, 0); assert.equal(f.counts().left, 1);
+  assert.equal(await hook.resume(), true); assert.equal(captures, 1); assert.deepEqual(uids, [undefined, 1]);
+  await hook.stop(); assert.equal(f.counts().closed, 1);
+});
+
+test('stopping while auto-resume credentials are pending prevents rejoin and closes retained capture', async () => {
+  const f = fixture(); let joins = 0; f.client.join = async () => { joins++; };
+  const { hook } = load(f.sdk, f.api); await hook.publish({ lowLatency: false }); await hook.pause();
+  let release!: (value: any) => void; const credentials = await f.api.getShareToken();
+  f.api.getShareToken = () => new Promise(resolve => { release = resolve; });
+  const resuming = hook.resume(); const stopped = hook.stop(); release(credentials);
+  await assert.rejects(resuming, /cancelled/); await stopped;
+  assert.equal(joins, 1); assert.equal(f.counts().closed, 1);
+});
+
+test('capture ending while paused closes the retained track and cannot auto-resume', async () => {
+  const f = fixture(); let stopped = 0;
+  const { hook } = load(f.sdk, f.api, () => stopped++);
+  await hook.publish({ lowLatency: false }); await hook.pause();
+  f.events['track-ended'](); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stopped, 1); assert.equal(f.counts().closed, 1); assert.equal(await hook.resume(), false);
 });
 
 for (const lowLatency of [false, true]) {

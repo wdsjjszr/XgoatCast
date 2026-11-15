@@ -30,7 +30,8 @@ function createSession() {
   return {
     token: crypto.randomBytes(24).toString('base64url'), channel: 'xc_native_test_' + id,
     status: 'pending', publisherClientId: null, lowLatency: false,
-    quality: null, createdAt: Date.now(), heartbeatAt: 0,
+    quality: null, createdAt: Date.now(), heartbeatAt: 0, emptySince: 0, stoppedAt: 0,
+    viewers: new Map(), graceReason: null,
     requests: {info:0, preview:0, token:0, start:0},
   };
 }
@@ -42,15 +43,18 @@ function json(res, status, value) {
 function authorized(url) { return typeof url.searchParams.get('t') === 'string' && url.searchParams.get('t') === session.token; }
 function info() {
   return {
-    status: session.status, sharerUsername: '临时共享会话', publisherClientId: session.publisherClientId,
-    viewerCount: 0, allowLowLatency: true, allowQualityPreference: true, lowLatency: session.lowLatency,
+    platform: 'heychat', status: session.status, graceReason: session.graceReason, sharerUsername: '临时共享会话', publisherClientId: session.publisherClientId,
+    viewerCount: session.viewers.size, allowLowLatency: true, allowQualityPreference: true, lowLatency: session.lowLatency,
+    ...(session.status === 'pending' ? { idleRemainingSec: Math.max(0, Math.ceil((session.createdAt + 600000 - Date.now()) / 1000)) } : {}),
+    ...(session.status === 'grace' ? { stoppedRemainingSec: Math.max(0, Math.ceil((session.stoppedAt + 60000 - Date.now()) / 1000)) } : {}),
+    ...(session.status === 'active' && session.viewers.size === 0 ? { noViewerRemainingSec: Math.max(0, Math.ceil((session.emptySince + 30000 - Date.now()) / 1000)) } : {}),
     allowedQualities,
     qualityBitrates: {
       '480p_2':{bitrateMax:1000}, '720p30':{bitrateMax:2500}, '1080p_2':{bitrateMax:5000},
       '1080p60':{bitrateMax:8000}, '1440p30':{bitrateMax:10000}, '1440p60':{bitrateMax:16000}, '4k30':{bitrateMax:20000},
     },
     ...(session.requests.token ? { agoraAccountLabel: '本地联调账号', remainingStandardMinutes: 1000,
-      estimatedRemainingSec: 600, rtcUsageRate: 100, budgetUpdatedAt: session.createdAt,
+      estimatedRemainingSec: session.status === 'auto_paused' ? null : 600, rtcUsageRate: session.status === 'auto_paused' ? 0 : 100, budgetUpdatedAt: session.createdAt,
       usageCalibratedAt: null, budgetEstimateStatus: 'local_estimate' } : {}),
   };
 }
@@ -66,9 +70,11 @@ function rtcToken(role, uid) {
   return RtcTokenBuilder.buildTokenWithUid(appId, certificate, session.channel, uid, role, 3600, 3600);
 }
 setInterval(() => {
-  if (session.status === 'active' && Date.now() - session.heartbeatAt > 8000) {
-    session.status='pending';session.publisherClientId=null;session.heartbeatAt=0;
-  }
+  const now = Date.now();
+  if (['active', 'auto_paused'].includes(session.status) && now - session.heartbeatAt > 75000) session.status='ended';
+  if (session.status === 'active' && !session.viewers.size && now - session.emptySince >= 30000) session.status='auto_paused';
+  if (session.status === 'grace' && now - session.stoppedAt >= 60000) session.status='ended';
+  if (session.status === 'pending' && now - session.createdAt >= 600000) session.status='ended';
 }, 1000).unref();
 
 const server = http.createServer(async (req,res) => {
@@ -85,11 +91,21 @@ const server = http.createServer(async (req,res) => {
     if (req.method==='GET' && url.pathname==='/api/share/info') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}session.requests.info++;json(res,200,info());return;
     }
+    if (req.method==='GET' && url.pathname==='/api/share/stream') {
+      if(!authorized(url)||session.status==='ended'){json(res,401,{message:'测试会话无效或已结束'});return;}
+      const current=session, id=url.searchParams.get('vid');
+      if(!id){json(res,400,{message:'缺少观众标识'});return;}
+      current.viewers.set(id,(current.viewers.get(id)||0)+1);
+      res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});
+      const push=()=>{if(session!==current||current.status==='ended'){res.write('event: session_ended\ndata: {}\n\n');res.end();return;}res.write('event: session_state\ndata: '+JSON.stringify(info())+'\n\n');};
+      push();const timer=setInterval(push,1000);
+      res.on('close',()=>{clearInterval(timer);const count=current.viewers.get(id)||0;if(count<=1)current.viewers.delete(id);else current.viewers.set(id,count-1);if(!current.viewers.size)current.emptySince=Date.now();});return;
+    }
     if (req.method==='GET' && url.pathname==='/api/share/preview') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}session.requests.preview++;json(res,200,{appId});return;
     }
     if (req.method==='GET' && url.pathname==='/api/share/token') {
-      if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}
+      if(!authorized(url)||session.status==='ended'){json(res,401,{message:'测试会话无效'});return;}
       const role=url.searchParams.get('role');
       if(role!==null&&role!=='publisher'&&role!=='subscriber'){json(res,400,{message:'RTC 角色无效'});return;}
       const publisher=role==='publisher';const requestedUid=url.searchParams.get('uid');
@@ -101,8 +117,9 @@ const server = http.createServer(async (req,res) => {
     if (req.method==='POST' && url.pathname==='/api/share/start') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}const body=await readBody(req);
       if(!allowedQualities.includes(body.quality)||typeof body.clientId!=='string'||body.clientId.length<16){json(res,400,{ok:false,message:'启动参数无效'});return;}
-      if(session.status==='active'&&session.publisherClientId!==body.clientId){json(res,200,{ok:false,message:'已有客户端共享'});return;}
-      session.status='active';session.publisherClientId=body.clientId;session.lowLatency=!!body.lowLatency;session.quality=body.quality;session.heartbeatAt=Date.now();session.requests.start++;json(res,200,{ok:true});return;
+      if(session.status==='ended'||(session.publisherClientId&&session.publisherClientId!==body.clientId)||
+          (body.autoResume&&(session.status!=='auto_paused'||!session.viewers.size))){json(res,200,{ok:false,message:'无法开始或恢复共享'});return;}
+      session.status='active';session.graceReason=null;session.publisherClientId=body.clientId;session.lowLatency=!!body.lowLatency;session.quality=body.quality;session.heartbeatAt=Date.now();session.emptySince=Date.now();session.requests.start++;json(res,200,{ok:true});return;
     }
     if (req.method==='POST' && url.pathname==='/api/share/telemetry') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}
@@ -110,11 +127,17 @@ const server = http.createServer(async (req,res) => {
     }
     if (req.method==='POST' && url.pathname==='/api/share/heartbeat') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}const body=await readBody(req);
-      const ok=session.status==='active'&&body.clientId===session.publisherClientId;if(ok)session.heartbeatAt=Date.now();json(res,200,{ok});return;
+      const ok=['active','auto_paused'].includes(session.status)&&body.clientId===session.publisherClientId;if(ok)session.heartbeatAt=Date.now();json(res,200,{ok});return;
     }
     if (req.method==='POST' && url.pathname==='/api/share/stop') {
       if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}
-      session.status='pending';session.publisherClientId=null;session.heartbeatAt=0;json(res,200,{ok:true});return;
+      const body=await readBody(req);if(body.clientId!==session.publisherClientId){json(res,403,{message:'共享者不匹配'});return;}
+      if(session.status!=='ended'&&session.graceReason!=='stopped'){session.status='grace';session.graceReason='stopped';session.stoppedAt=Date.now();}json(res,200,{ok:true});return;
+    }
+    if (req.method==='POST' && url.pathname==='/api/share/end') {
+      if(!authorized(url)){json(res,401,{message:'测试会话无效'});return;}
+      const body=await readBody(req);if(session.publisherClientId&&body.clientId!==session.publisherClientId){json(res,403,{message:'共享者不匹配'});return;}
+      session.status='ended';json(res,200,{ok:true});return;
     }
     json(res,404,{message:'Not found'});
   } catch(error) { json(res,500,{message:error?.message || '测试服务错误'}); }

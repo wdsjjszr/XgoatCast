@@ -211,6 +211,7 @@ export class SuperAdminController {
       enabledTriggerWords: s.triggerWords.split(',').map(word => word.trim()).filter(Boolean),
       triggerWordLabels: this.db.getGlobalConfig().triggerWordLabels,
       idleTimeoutSec: s.idleTimeoutSec,
+      stoppedTimeoutSec: s.stoppedTimeoutSec,
       heartbeatIntervalSec: s.heartbeatIntervalSec,
       noViewerTimeoutSec: s.noViewerTimeoutSec,
       publicDomain: this.db.getGlobalConfig().publicDomain,
@@ -300,6 +301,7 @@ export class SuperAdminController {
       enabledTriggerWords: s.triggerWords.split(',').map(word => word.trim()).filter(Boolean),
       triggerWordLabels: this.db.getGlobalConfig().triggerWordLabels,
       idleTimeoutSec: s.idleTimeoutSec,
+      stoppedTimeoutSec: s.stoppedTimeoutSec,
       heartbeatIntervalSec: s.heartbeatIntervalSec,
       noViewerTimeoutSec: s.noViewerTimeoutSec,
       publicDomain: this.db.getGlobalConfig().publicDomain,
@@ -339,6 +341,7 @@ export class SuperAdminController {
     if (dto.idleTimeoutSec !== undefined) updates.idleTimeoutSec = clampInt(dto.idleTimeoutSec, SESSION_CLOSE_SEC_MIN, SESSION_CLOSE_SEC_MAX, s.idleTimeoutSec);
     if (dto.heartbeatIntervalSec !== undefined) updates.heartbeatIntervalSec = clampInt(dto.heartbeatIntervalSec, 2, 60, s.heartbeatIntervalSec);
     if (dto.noViewerTimeoutSec !== undefined) updates.noViewerTimeoutSec = clampInt(dto.noViewerTimeoutSec, SESSION_CLOSE_SEC_MIN, SESSION_CLOSE_SEC_MAX, s.noViewerTimeoutSec);
+    if (s.platform === 'heychat' && dto.stoppedTimeoutSec !== undefined) updates.stoppedTimeoutSec = clampInt(dto.stoppedTimeoutSec, SESSION_CLOSE_SEC_MIN, SESSION_CLOSE_SEC_MAX, s.stoppedTimeoutSec ?? s.idleTimeoutSec);
     if (dto.allowedQualities !== undefined) {
       updates.allowedQualities = JSON.stringify(sanitizeAllowedQualities(dto.allowedQualities));
     }

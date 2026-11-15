@@ -299,6 +299,7 @@ export class ServerAdminController {
       triggerWordLabels: this.db.getGlobalConfig().triggerWordLabels,
       enabledTriggerWords: server.triggerWords.split(',').map(word => word.trim()).filter(Boolean),
       idleTimeoutSec: server.idleTimeoutSec,
+      stoppedTimeoutSec: server.stoppedTimeoutSec,
       noViewerTimeoutSec: server.noViewerTimeoutSec,
       publicDomain: this.db.getGlobalConfig().publicDomain,
       allowLowLatency: server.allowLowLatency,
@@ -320,6 +321,7 @@ export class ServerAdminController {
     // 心跳间隔与声网令牌有效期由超管统一设置，这里忽略管理员提交的这两个字段。
     if (dto.idleTimeoutSec !== undefined) updates.idleTimeoutSec = clampInt(dto.idleTimeoutSec, SESSION_CLOSE_SEC_MIN, SESSION_CLOSE_SEC_MAX, server.idleTimeoutSec);
     if (dto.noViewerTimeoutSec !== undefined) updates.noViewerTimeoutSec = clampInt(dto.noViewerTimeoutSec, SESSION_CLOSE_SEC_MIN, SESSION_CLOSE_SEC_MAX, server.noViewerTimeoutSec);
+    if (server.platform === 'heychat' && dto.stoppedTimeoutSec !== undefined) updates.stoppedTimeoutSec = clampInt(dto.stoppedTimeoutSec, SESSION_CLOSE_SEC_MIN, SESSION_CLOSE_SEC_MAX, server.stoppedTimeoutSec ?? server.idleTimeoutSec);
     if (dto.allowedQualities !== undefined) {
       updates.allowedQualities = JSON.stringify(sanitizeAllowedQualities(dto.allowedQualities));
     }

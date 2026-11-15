@@ -249,6 +249,16 @@ test('real HTTP auth rejects anonymous, foreign-space and forged account operati
     const viewed = await (await call(sharePath + 'token?t=' + session.token + '&role=subscriber&uid=456')).json();
     assert.equal(viewed.appId, credentials().appId); assert.equal(viewed.uid, 456);
     assert.equal((await (await call(sharePath + 'info?t=' + session.token)).json()).agoraAccountLabel, credentials().label);
+    assert.equal((await call('/api/spaces/heychat/a/config', tokenA, 'PUT', { stoppedTimeoutSec: 999 })).status, 200);
+    assert.equal((await (await call('/api/spaces/heychat/a/config', tokenA)).json()).stoppedTimeoutSec, 600);
+    const started = await call(sharePath + 'start?t=' + session.token, '', 'POST', { quality: '1080p_2', clientId: publisher });
+    assert.equal((await started.json()).ok, true);
+    assert.equal((await call(sharePath + 'end?t=' + session.token, '', 'POST', { clientId: 'foreign' })).status, 401);
+    assert.equal((await call(sharePath + 'end?t=' + session.token + '&role=subscriber', '', 'POST', { clientId: publisher })).status, 401);
+    for (let i = 0; i < 2; i++) {
+      assert.equal((await (await call(sharePath + 'end?t=' + session.token, '', 'POST', { clientId: publisher })).json()).ok, true);
+    }
+    assert.equal((await call(sharePath + 'start?t=' + session.token, '', 'POST', { quality: '1080p_2', clientId: publisher })).status, 401);
   } finally {
     if (child && child.exitCode === null) { child.kill(); await once(child, 'exit'); }
     f.close();

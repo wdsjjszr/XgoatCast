@@ -18,6 +18,7 @@ export function useAgoraView(token: string, active: boolean, lowLatency: boolean
   const audioRef = useRef<IRemoteAudioTrack | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const leavingRef = useRef<Promise<void>>(Promise.resolve());
+  const identityRef = useRef<{ token: string; uid: number } | null>(null);
   const volumeRef = useRef(100);
   const mutedRef = useRef(false);
   const audioBlockedRef = useRef(false);
@@ -80,9 +81,10 @@ export function useAgoraView(token: string, active: boolean, lowLatency: boolean
         if (cancelled) return;
         if (!AgoraRTC) throw Object.assign(new Error('Agora SDK 未加载，请刷新后重试'), { code: 'RTC_SDK_UNAVAILABLE' });
         AgoraRTC.setLogLevel(2);
-        const credentials = await api.getShareToken(token, 'subscriber', undefined, abort.signal);
+        const credentials = await api.getShareToken(token, 'subscriber', identityRef.current?.token === token ? identityRef.current.uid : undefined, abort.signal);
         if (cancelled) return;
         uid = credentials.uid;
+        identityRef.current = { token, uid: credentials.uid };
         client = AgoraRTC.createClient({ mode: lowLatency ? 'rtc' : 'live', codec: 'h264' });
         clientRef.current = client;
         if (!lowLatency) {

@@ -46,7 +46,7 @@ export class SessionService implements OnModuleInit {
   async onModuleInit() {
     const now = Date.now(), sql = this.db.integrationDatabase;
     for (const row of this.db.getUnfinishedSessions()) {
-      if (row.status !== 'active' && !(row.status === 'grace' && row.graceReason === 'heartbeat')) continue;
+      if (!['active', 'auto_paused'].includes(row.status) && !(row.status === 'grace' && row.graceReason === 'heartbeat')) continue;
       const saved = sql.prepare('SELECT * FROM session_recovery WHERE session_id=?').get(row.id) as any;
       // A repeated restart must never grant an absent publisher another full window.
       const until = saved?.until_at || Math.min(now + 60_000, row.lastHeartbeat + 90_000);
@@ -134,12 +134,13 @@ export class SessionService implements OnModuleInit {
     if (server) {
       return {
         idleTimeoutSec: server.idleTimeoutSec,
+        stoppedTimeoutSec: session.platform === 'heychat' ? server.stoppedTimeoutSec ?? server.idleTimeoutSec : server.idleTimeoutSec,
         heartbeatIntervalSec: server.heartbeatIntervalSec,
         noViewerTimeoutSec: server.noViewerTimeoutSec,
       };
     }
     // Fallback: hardcoded defaults (server should always exist)
-    return { idleTimeoutSec: 60, heartbeatIntervalSec: 5, noViewerTimeoutSec: 180 };
+    return { idleTimeoutSec: 60, stoppedTimeoutSec: 60, heartbeatIntervalSec: 5, noViewerTimeoutSec: 180 };
   }
 
   createSession(params: {
@@ -250,17 +251,19 @@ export class SessionService implements OnModuleInit {
     return this.db.getSessionsByServer(serverId).map((s) => this.fromDb(s));
   }
 
-  startSharing(token: string, clientId?: string, lowLatency?: boolean): ShareSession | undefined {
+  startSharing(token: string, clientId?: string, lowLatency?: boolean, autoResume = false): ShareSession | undefined {
     const session = this.getByToken(token);
     if (!session || session.status === SessionStatus.ENDED) {
       this.logger.warn(`startSharing: session not found or ended, token=${token.substring(0, 8)}...`);
       return undefined;
     }
+    if (autoResume && (!([SessionStatus.AUTO_PAUSED, SessionStatus.ACTIVE].includes(session.status)) ||
+        (session.status === SessionStatus.AUTO_PAUSED && session.viewerCount === 0) || !session.publisherClientId || clientId !== session.publisherClientId)) return undefined;
 
     // 需求1: 一个链接只有第一个点开的人能共享
-    if (session.publisherClientId && clientId && session.publisherClientId !== clientId) {
+    if (session.publisherClientId && session.publisherClientId !== clientId) {
       this.logger.warn(
-        `startSharing: rejected, publisher locked to ${session.publisherClientId.substring(0, 8)}..., got ${clientId.substring(0, 8)}...`,
+        `startSharing: rejected, publisher locked to ${session.publisherClientId.substring(0, 8)}..., got ${clientId?.substring(0, 8) || 'missing'}...`,
       );
       return undefined;
     }
@@ -275,6 +278,11 @@ export class SessionService implements OnModuleInit {
     const firstStart = !session.startedAt;
     const now = Date.now();
     const wasGrace = session.status === SessionStatus.GRACE;
+    if (session.status !== SessionStatus.ACTIVE && session.viewerCount === 0) {
+      this.lastViewerMap.set(session.id, now);
+      this.db.integrationDatabase.prepare(`INSERT INTO session_recovery(session_id,empty_since) VALUES(?,?)
+        ON CONFLICT(session_id) DO UPDATE SET empty_since=excluded.empty_since`).run(session.id, now);
+    }
     session.status = SessionStatus.ACTIVE;
     session.lastHeartbeat = now;
     session.graceStartedAt = null;
@@ -312,7 +320,7 @@ export class SessionService implements OnModuleInit {
       `startSharing: session=${session.id}, wasGrace=${wasGrace}, platformMessageId=${session.platformMessageId || 'none'}, externalChannelId=${session.externalChannelId || 'empty'}, lowLatency=${session.lowLatency}`,
     );
 
-    if (!wasGrace && !session.platformMessageId) {
+    if (firstStart && !session.platformMessageId) {
       this.logger.log(`startSharing: emitting session.started event for ${session.id}`);
       this.bus.emitSessionStarted({
         ...this.getPlatformContext(session),
@@ -387,6 +395,7 @@ export class SessionService implements OnModuleInit {
     if (!session || session.status === SessionStatus.ENDED) return undefined;
     this.usage?.settle(session.id);
     const now = Date.now();
+    if (session.status === SessionStatus.GRACE && session.graceReason === 'stopped') return session;
     session.status = SessionStatus.GRACE;
     session.graceReason = 'stopped';
     session.graceStartedAt = now;
@@ -406,7 +415,7 @@ export class SessionService implements OnModuleInit {
 
     const cfg = this.getServerSessionConfig(session);
     this.logger.log(
-      `stopSharing: session=${session.id} entered 'stopped' grace, idle timeout ${cfg.idleTimeoutSec}s`,
+      `stopSharing: session=${session.id} entered 'stopped' grace, timeout ${cfg.stoppedTimeoutSec}s`,
     );
 
     // 通知 SSE 控制器推送最新状态给发布端
@@ -644,19 +653,22 @@ export class SessionService implements OnModuleInit {
     const publicDomain = globalCfg.publicDomain;
 
     let idleRemainingSec: number | undefined;
+    let stoppedRemainingSec: number | undefined;
     const cfg = this.getServerSessionConfig(session);
     if (session.status === SessionStatus.PENDING) {
       const elapsed = (Date.now() - session.createdAt) / 1000;
       idleRemainingSec = Math.max(0, Math.ceil(cfg.idleTimeoutSec - elapsed));
     } else if (session.status === SessionStatus.GRACE && session.graceStartedAt) {
       const elapsed = (Date.now() - session.graceStartedAt) / 1000;
-      idleRemainingSec = Math.max(0, Math.ceil(cfg.idleTimeoutSec - elapsed));
+      if (session.platform === 'heychat' && session.graceReason === 'stopped') {
+        stoppedRemainingSec = Math.max(0, Math.ceil(cfg.stoppedTimeoutSec - elapsed));
+      } else idleRemainingSec = Math.max(0, Math.ceil(cfg.idleTimeoutSec - elapsed));
     }
 
     let noViewerRemainingSec: number | undefined;
     const memLastViewer = this.lastViewerMap.get(session.id);
     if (
-      session.status !== SessionStatus.ENDED &&
+      (session.platform === 'heychat' ? session.status === SessionStatus.ACTIVE : session.status !== SessionStatus.ENDED) &&
       session.viewerCount === 0 &&
       memLastViewer
     ) {
@@ -694,7 +706,9 @@ export class SessionService implements OnModuleInit {
       standardMinutes,
       estimatedCost,
       publisherClientId: session.publisherClientId,
+      graceReason: session.graceReason,
       idleRemainingSec,
+      stoppedRemainingSec,
       noViewerRemainingSec,
       lowLatency: session.lowLatency,
       allowLowLatency: !!serverConfig?.allowLowLatency,
@@ -739,14 +753,24 @@ export class SessionService implements OnModuleInit {
 
       // 无人观看倒计时（从内存 Map 读 lastViewerAt，不再查 DB）
       if (
-        session.status !== SessionStatus.ENDED &&
+        (session.platform === 'heychat' ? session.status === SessionStatus.ACTIVE : session.status !== SessionStatus.ENDED) &&
         session.viewerCount === 0 &&
         this.lastViewerMap.has(session.id)
       ) {
         const lastViewerAt = this.lastViewerMap.get(session.id)!;
         if (now - lastViewerAt > cfg.noViewerTimeoutSec * 1000) {
-          this.endSession(session.id, 'no_viewer_timeout');
-          continue;
+          if (session.platform === 'heychat') {
+            this.usage?.settle(session.id);
+            this.db.updateSession(session.id, { status: SessionStatus.AUTO_PAUSED });
+            this.usage?.refreshBudgets();
+            this.bus.emitSessionStateChanged({ sessionId: session.id, status: SessionStatus.AUTO_PAUSED, viewerCount: 0 });
+            this.logger.log(`session ${session.id} auto_paused: no viewers`);
+            // Still check the publisher lease; an absent capture must not live forever.
+            session.status = SessionStatus.AUTO_PAUSED;
+          } else {
+            this.endSession(session.id, 'no_viewer_timeout');
+            continue;
+          }
         }
       }
 
@@ -754,6 +778,14 @@ export class SessionService implements OnModuleInit {
       if (session.status === SessionStatus.PENDING) {
         if (now - session.createdAt > cfg.idleTimeoutSec * 1000) {
           this.endSession(session.id, 'idle_timeout');
+        }
+        continue;
+      }
+
+      if (session.status === SessionStatus.AUTO_PAUSED) {
+        const heartbeat = this.publisherHeartbeatMap.get(session.id) ?? session.lastHeartbeat;
+        if (now - heartbeat > (cfg.heartbeatIntervalSec * 3 + cfg.idleTimeoutSec) * 1000) {
+          this.endSession(session.id, 'heartbeat_timeout');
         }
         continue;
       }
@@ -782,9 +814,9 @@ export class SessionService implements OnModuleInit {
         continue;
       }
 
-      // GRACE 状态：统一使用 idleTimeoutSec
       if (session.status === SessionStatus.GRACE && session.graceStartedAt) {
-        if (now - session.graceStartedAt > cfg.idleTimeoutSec * 1000) {
+        const timeout = session.graceReason === 'stopped' ? cfg.stoppedTimeoutSec : cfg.idleTimeoutSec;
+        if (now - session.graceStartedAt > timeout * 1000) {
           this.endSession(session.id, 'idle_timeout');
           continue;
         }

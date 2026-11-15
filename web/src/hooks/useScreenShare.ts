@@ -80,12 +80,16 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
   const operationRef = useRef(0);
   const stoppingRef = useRef(false);
   const stopPromiseRef = useRef<Promise<void> | null>(null);
+  const pausedRef = useRef(false);
+  const transferRef = useRef<Promise<unknown> | null>(null);
+  const resumeCaptureRef = useRef<(() => Promise<boolean>) | null>(null);
   const rejoiningRef = useRef(false);
   const renewalRef = useRef<ReturnType<typeof installRtcTokenRenewal> | null>(null);
   const logRef = useRef<RtcLog | null>(null);
   const onTrackEndedRef = useRef(onTrackEnded);
   onTrackEndedRef.current = onTrackEnded;
   const [isSharing, setIsSharing] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [error, setError] = useState<string>('');
   const [microphoneBusy, setMicrophoneBusy] = useState(false);
   // 本地预览容器（分享者查看自己的画面，不走声网）
@@ -188,13 +192,13 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
           : AgoraRTC.createClient({ mode: 'live', codec: 'h264' });
         clientRef.current = client;
         const currentClient = client;
-        const current = () => operationRef.current === operation && clientRef.current === currentClient;
+        const current = () => operationRef.current === operation && clientRef.current === currentClient && !pausedRef.current;
         const uid = tokenResp.uid;
         logRef.current = (event, fields) => log(event, { uid, ...fields });
         client.on('connection-state-change', (state, _previous, reason) => {
           if (current()) log('connection_change', { uid, state, reason });
         });
-        renewalRef.current = installRtcTokenRenewal({
+        const installRenewal = () => { renewalRef.current = installRtcTokenRenewal({
           client, token, role: 'publisher', identity: tokenResp, isCurrent: current, log,
           beforeRejoin: () => {
             rejoiningRef.current = true;
@@ -212,7 +216,8 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
             void stop('TOKEN_RECOVERY');
             onTrackEndedRef.current?.();
           },
-        });
+        }); };
+        installRenewal();
 
         // 极速直播共享者必须先切 host 才能 publish
         if (!opts.lowLatency) {
@@ -245,14 +250,35 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
         await client.publish(tracks);
         check();
         log('publish_success', { uid });
-        screenVideoRef.current?.on('track-ended', () => {
-          if (!current()) return;
+        const capturedVideo = screenVideoRef.current;
+        capturedVideo?.on('track-ended', () => {
+          if (screenVideoRef.current !== capturedVideo) return;
           log('capture_ended', { uid, reason: 'CAPTURE_ENDED' });
           // track 意外结束（用户通过浏览器原生 UI 停止、或高分辨率导致资源不足）
-          // 通知父组件发送 sharing_stopped，让 session 进入 60 秒恢复宽限期
+          // 采集结束按主动停止处理，不再因观众加入而恢复。
           stop();
           onTrackEndedRef.current?.();
         });
+        resumeCaptureRef.current = async () => {
+          const next = await api.getShareToken(token, 'publisher', uid);
+          check();
+          if (next.appId !== tokenResp.appId || next.channel !== tokenResp.channel || next.uid !== uid) {
+            throw new Error('共享身份已变化，请重新开始共享。');
+          }
+          pausedRef.current = false;
+          if (!opts.lowLatency) { await currentClient.setClientRole('host'); check(); }
+          log('join_start', { uid, reason: 'AUTO_RESUME' });
+          await currentClient.join(next.appId, next.channel, next.token || null, uid);
+          check();
+          log('join_success', { uid, reason: 'AUTO_RESUME' });
+          await currentClient.publish([screenVideoRef.current, screenAudioRef.current, microphoneRef.current].filter(Boolean) as (ILocalVideoTrack | ILocalAudioTrack)[]);
+          check();
+          installRenewal();
+          rejoiningRef.current = false;
+          log('publish_success', { uid, reason: 'AUTO_RESUME' });
+          setIsPaused(false);
+          return true;
+        };
         setIsSharing(true);
         return { success: true };
       } catch (e: any) {
@@ -289,6 +315,33 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
     },
     [token, publisherId],
   );
+
+  const pause = useCallback(async () => {
+    if (transferRef.current) return transferRef.current;
+    const client = clientRef.current;
+    if (!client || pausedRef.current || stoppingRef.current) return;
+    pausedRef.current = true;
+    const renewal = renewalRef.current;
+    renewalRef.current = null;
+    const task = (async () => {
+      await renewal?.dispose();
+      try { await client.unpublish(); }
+      finally {
+        await client.leave();
+        logRef.current?.('rtc_leave', { reason: 'AUTO_PAUSE' });
+      }
+      if (clientRef.current === client) { rejoiningRef.current = false; setIsPaused(true); }
+    })();
+    transferRef.current = task;
+    try { await task; } finally { if (transferRef.current === task) transferRef.current = null; }
+  }, []);
+
+  const resume = useCallback(async () => {
+    if (transferRef.current || !pausedRef.current || stoppingRef.current || !resumeCaptureRef.current) return false;
+    const task = resumeCaptureRef.current();
+    transferRef.current = task;
+    try { return await task; } finally { if (transferRef.current === task) transferRef.current = null; }
+  }, []);
 
   const setMicrophoneEnabled = useCallback(async (enabled: boolean): Promise<boolean> => {
     const client = clientRef.current;
@@ -343,6 +396,9 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
     screenAudioRef.current = null;
     microphoneRef.current = null;
     clientRef.current = null;
+    resumeCaptureRef.current = null;
+    pausedRef.current = false;
+    setIsPaused(false);
     for (const track of tracks) {
       try { track?.removeAllListeners('track-ended'); } catch {}
       try { track?.stop(); } catch {}
@@ -360,6 +416,7 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
     }
     stopPromiseRef.current = (async () => {
       try {
+        await transferRef.current?.catch(() => {});
         await renewal?.dispose();
         if (client) await client.leave();
         if (client) logRef.current?.('rtc_leave', { reason });
@@ -374,5 +431,13 @@ export function useScreenShare(token: string, onTrackEnded?: () => void, publish
 
   useEffect(() => () => { void stop('CLEANUP'); }, [token, stop]);
 
-  return { isSharing, error, microphoneBusy, publish, setMicrophoneEnabled, stop, setLocalPreviewContainer };
+  useEffect(() => {
+    if (!isSharing || !publisherId) return;
+    const beat = () => { void api.heartbeat(token, publisherId).catch(() => {}); };
+    beat();
+    const timer = setInterval(beat, 4000);
+    return () => clearInterval(timer);
+  }, [isSharing, token, publisherId]);
+
+  return { isSharing, isPaused, error, microphoneBusy, publish, pause, resume, setMicrophoneEnabled, stop, setLocalPreviewContainer };
 }
