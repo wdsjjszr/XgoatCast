@@ -25,7 +25,7 @@ async function download(url,name,expected){
 }
 async function main(){
   fs.mkdirSync(dir,{recursive:true});
-  const zip=await download('https://download.shengwang.cn/sdk/release/Shengwang_Native_SDK_for_Windows_v4.6.2_FULL.zip','agora-4.6.2.zip','fecad7d6b3f6a647e04408dc7a23401098ab80d8a96bbf504b0c5d2062e5e5c9');
+  const zip=await download('https://download.agora.io/sdk/release/Shengwang_Native_SDK_for_Windows_v4.6.2_FULL.zip','agora-4.6.2.zip','fecad7d6b3f6a647e04408dc7a23401098ab80d8a96bbf504b0c5d2062e5e5c9');
   const dest=path.join(dir,'agora');fs.mkdirSync(dest,{recursive:true});
   if(process.platform==='win32')execFileSync('tar.exe',['-xf',zip,'-C',dest],{stdio:'inherit'});
   else execFileSync('unzip',['-oq',zip,'-d',dest],{stdio:'inherit'});
