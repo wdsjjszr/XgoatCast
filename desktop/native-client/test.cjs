@@ -46,7 +46,7 @@ async function capture(dir, name, pids, excluded, included, toggleOff) {
   for(const name of ['screen','registration','audio']){
     const png=path.join(dir,name+'.png');await run([name==='screen'?'--render-test':'--render-'+name,png]);
     const data=fs.readFileSync(png);assert.equal(data.subarray(1,4).toString(),'PNG');
-    assert.equal(data.readUInt32BE(16),name==='audio'?480:name==='registration'?1800:1200);assert.equal(data.readUInt32BE(20),name==='audio'?320:name==='registration'?1230:820);
+    assert.equal(data.readUInt32BE(16),name==='audio'?480:name==='registration'?1500:1000);assert.equal(data.readUInt32BE(20),name==='audio'?260:name==='registration'?1230:820);
   }
   const sdkReport=path.join(dir,'sdk-test.txt');await run(['--sdk-test',sdkReport]);
   assert.match(fs.readFileSync(sdkReport,'utf8'),/enumeration passed/);

@@ -164,7 +164,7 @@ class Capture {
   }
 };
 void Audio::start(std::set<std::wstring> excluded,std::function<void(const short*)> packet,std::function<void(std::string)> failure,std::set<DWORD> testPids) {
-  stop();if(windowsBuild()<20348)throw std::runtime_error("软件声音过滤需要 Windows 11，请先取消共享声音");
+  stop();if(!supportsProcessAudio())throw std::runtime_error("程序声音需要 Windows 10 2004 或更新版本");
   running=true;
   auto ready=std::make_shared<std::promise<void>>();auto future=ready->get_future();
   thread=std::thread([this,excluded=std::move(excluded),packet,failure,ready,testPids=std::move(testPids)]{

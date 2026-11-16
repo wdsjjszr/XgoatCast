@@ -1,6 +1,6 @@
 # Windows 客户端发布与更新
 
-当前自用构建版本为 `0.0.1-beta.2`，只构建 Windows x64 安装包。[更新说明](releases/0.0.1-beta.2.md)列出配套功能和验收状态。
+当前自用构建版本为 `0.0.1-beta.3`，构建 Windows x64 安装包及独立验证用便携目录。[更新说明](releases/0.0.1-beta.3.md)列出配套功能和验收状态。自用构建不查询作者更新清单；「关于 → 下载自用更新」打开本仓库 Actions，不与作者的版本序列比较。
 
 ## GitHub 在线编译
 
@@ -8,7 +8,9 @@
 
 工作流使用 Windows Server 2022、MSVC x64、Node.js 22 和 Inno Setup 6，复用现有依赖校验、编译、原生 UI/协议/策略/启动自检和打包脚本，无需配置服务端凭证。成功后在该次运行的 **Artifacts** 下载 `XgoatCast-windows-x64-<运行序号>`，解压得到安装包、`SHA256SUMS.txt` 和 `BUILD_INFO.txt`。`XgoatCast-ui-checks-<运行序号>` 提供 UI 图片和自检报告，产物保留 30 天。
 
-在线流程生成安装包供下载；更新网站下载清单使用下述独立发版流程。
+`XgoatCast-portable-x64-<运行序号>` 提供同次编译的 EXE 和所需 DLL，可运行自检而不安装、不替换现用客户端；所有 DLL 须与 EXE 放在一起。正常启动便携客户端仍可能注册网页协议，验证时仅使用文档列出的 `--ui-test`、`--self-test`、`--sdk-test`、`--audio-test` 等测试入口。
+
+在线流程生成安装包供下载，不自动更新网站下载清单。下述独立发版流程保留为上游发布工具；此自用构建的 `UpdateManifestPath` 为空，不消费官网清单。
 
 ## 自动完成整套发版
 

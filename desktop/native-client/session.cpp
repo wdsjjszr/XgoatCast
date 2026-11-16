@@ -87,7 +87,7 @@ UpdateInfo parseUpdateManifest(const Json& result,const std::string& currentVers
   auto notes=result.value("notes",std::string());if(notes.size()>4000)notes.resize(4000);
   return {true,version,download,page,notes,result.value("publishedAt",std::string())};
 }
-UpdateInfo checkForUpdate(){return parseUpdateManifest(requestJson(DefaultServer,wide(std::string(UpdateManifestPath)+"?client="+AppVersion),nullptr,5000),AppVersion);}
+UpdateInfo checkForUpdate(){if(!UpdateManifestPath[0])return {};return parseUpdateManifest(requestJson(DefaultServer,wide(std::string(UpdateManifestPath)+"?client="+AppVersion),nullptr,5000),AppVersion);}
 bool probeServer(const std::string& origin){
   // Existing anonymous backend route: a real JSON response, not a cached home page or session endpoint.
   auto result=requestJson(origin,L"/api/meta/admin-migration?probe="+std::to_wstring(GetTickCount64()),nullptr,1500);
@@ -425,15 +425,15 @@ struct Session::Impl : IRtcEngineEventHandler {
     const auto& settings=activeSettings;
     ChannelMediaOptions options;options.publishCameraTrack=false;options.publishMicrophoneTrack=false;options.publishScreenTrack=true;options.autoSubscribeAudio=false;options.autoSubscribeVideo=false;options.clientRoleType=CLIENT_ROLE_BROADCASTER;
     options.channelProfile=current.lowLatency?CHANNEL_PROFILE_COMMUNICATION:CHANNEL_PROFILE_LIVE_BROADCASTING;
-    options.publishMicrophoneTrack=settings.microphone;options.publishCustomAudioTrack=windowsBuild()>=20348;options.enableAudioRecordingOrPlayout=true;
+    options.publishMicrophoneTrack=settings.microphone;options.publishCustomAudioTrack=supportsProcessAudio();options.enableAudioRecordingOrPlayout=true;
     if(settings.microphone){if(!microphones.error.empty())throw std::runtime_error(utf8(microphones.error));if(microphones.devices.empty())throw std::runtime_error("没有可用麦克风，请关闭麦克风或连接设备");}
     sdk(engine->enableLocalAudio(settings.microphone),"设置麦克风");
-    if(windowsBuild()>=20348&&track==0xffffffff){AudioTrackConfig config;config.enableLocalPlayback=false;track=media->createCustomAudioTrack(AUDIO_TRACK_MIXABLE,config);if(track==0xffffffff)throw std::runtime_error("无法创建软件声音轨道");}if(track!=0xffffffff)options.publishCustomAudioTrackId=track;
+    if(supportsProcessAudio()&&track==0xffffffff){AudioTrackConfig config;config.enableLocalPlayback=false;track=media->createCustomAudioTrack(AUDIO_TRACK_MIXABLE,config);if(track==0xffffffff)throw std::runtime_error("无法创建软件声音轨道");}if(track!=0xffffffff)options.publishCustomAudioTrackId=track;
     joined=false;left=false;sdk(engine->joinChannel(credentials.at("token").get<std::string>().c_str(),credentials.at("channel").get<std::string>().c_str(),credentials.at("uid").get<unsigned>(),options),"加入共享");
     auto deadline=GetTickCount64()+15000;while(!joined){ensure();if(GetTickCount64()>deadline)throw std::runtime_error("共享连接超时");Sleep(20);}ensure();
     if(rtcClientId.empty()){GUID usageId{};check(CoCreateGuid(&usageId),"创建用量标识");wchar_t usageText[40]{};StringFromGUID2(usageId,usageText,40);rtcClientId=utf8(std::wstring(usageText+1,36));usageSequence=0;}reportRtc(true);
     audio.include(settings.included);
-    if(windowsBuild()>=20348)audio.start({},[this](const short* pcm){agora::media::IAudioFrameObserverBase::AudioFrame frame;frame.type=agora::media::IAudioFrameObserverBase::FRAME_TYPE_PCM16;frame.samplesPerChannel=480;frame.bytesPerSample=agora::rtc::TWO_BYTES_PER_SAMPLE;frame.channels=2;frame.samplesPerSec=48000;frame.buffer=const_cast<short*>(pcm);frame.renderTimeMs=engine->getCurrentMonotonicTimeInMs();if(media->pushAudioFrame(&frame,track)<0)fail("发送软件声音失败");},[this](auto message){fail(message);});
+    if(supportsProcessAudio())audio.start({},[this](const short* pcm){agora::media::IAudioFrameObserverBase::AudioFrame frame;frame.type=agora::media::IAudioFrameObserverBase::FRAME_TYPE_PCM16;frame.samplesPerChannel=480;frame.bytesPerSample=agora::rtc::TWO_BYTES_PER_SAMPLE;frame.channels=2;frame.samplesPerSec=48000;frame.buffer=const_cast<short*>(pcm);frame.renderTimeMs=engine->getCurrentMonotonicTimeInMs();if(media->pushAudioFrame(&frame,track)<0)fail("发送软件声音失败");},[this](auto message){fail(message);});
     ensure();Json body{{"quality",current.quality},{"clientId",current.clientId},{"lowLatency",current.lowLatency},{"autoResume",autoResume}};
     // Treat a lost start response as possibly claimed, so cleanup still attempts server stop.
     claimed=true;auto response=request(current,"start",&body);if(!response.value("ok",false)){

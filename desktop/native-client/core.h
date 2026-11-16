@@ -23,6 +23,8 @@ std::wstring stem(std::wstring s);
 std::wstring errorText(HRESULT hr);
 void check(HRESULT hr, const char* context);
 unsigned windowsBuild();
+// Updated Windows 10 supports process loopback too; 20348 incorrectly excludes 22H2.
+inline bool supportsProcessAudio(unsigned build=windowsBuild()){return build>=19041;}
 struct Launch {
   std::string server, token, clientId, quality = "1080p_2";
   std::string launchId;

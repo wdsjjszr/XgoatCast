@@ -317,7 +317,7 @@ void drawPreview(Graphics&g){
   stroke(g,r,ui::interactiveDefault,1,3);
 }
 void paintCompactSound(Graphics&g){
-  bool enabled=(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused);bool supported=windowsBuild()>=20348;
+  bool enabled=(state.phase==Phase::Sharing||state.phase==Phase::AutoPaused);bool supported=supportsProcessAudio();
   fill(g,RectF(496,56,64,314),paper,2);hairline(g,496,56,496,370,ui::seam);
   auto audioIcon=[&](int id,RectF r,bool on,HICON icon,bool mic){
     bool available=enabled&&(mic||supported);
@@ -488,7 +488,7 @@ void paintMenu(Graphics&g){
   if(int(items.size())>rows){float height=(box.Height-12)*rows/items.size();fill(g,RectF(box.GetRight()-4,box.Y+6+(box.Height-12-height)*menuOffset/(items.size()-rows),2,height),line,1);}
 }
 void paintSound(Graphics&g){
-  bool enabled=hasLaunch&&state.phase!=Phase::Starting&&state.phase!=Phase::Stopping,audioSupported=windowsBuild()>=20348;
+  bool enabled=hasLaunch&&state.phase!=Phase::Starting&&state.phase!=Phase::Stopping,audioSupported=supportsProcessAudio();
   label(g,L"共享设置",RectF(712,84,264,28),18,text,true);
   RectF quality(712,124,264,42);fill(g,quality,!busy()?paper:ui::controlDisabled,4);stroke(g,quality,hoverId==45?text:line,1,4);
   label(g,state.allowedQualities.empty()?L"等待服务器提供画质":qualityName(settings.quality),RectF(728,124,192,42),15,text,true);glyph(g,0xE70D,RectF(932,124,24,42),12,muted);if(!busy()&&!state.allowedQualities.empty())hits.push_back({quality,45});hint(45,quality,L"选择服务器允许的分辨率与帧率；停止共享后可调整");
@@ -682,6 +682,10 @@ void trayMenu(){
 }
 
 void checkForUpdates(bool interactive){
+  if(!UpdateManifestPath[0]){
+    if(interactive&&INT_PTR(ShellExecuteW(window,L"open",wide(SelfBuildPage).c_str(),nullptr,nullptr,SW_SHOWNORMAL))<=32){localError=true;localMessage=L"无法打开浏览器，请到本仓库 GitHub Actions 下载自用更新";show();}
+    return;
+  }
   if(updateChecking.exchange(true)){if(interactive){localError=false;localMessage=L"正在检查更新，请稍候";InvalidateRect(window,nullptr,FALSE);}return;}
   if(updateThread.joinable())updateThread.join();
   if(interactive){localError=false;localMessage=L"正在检查更新…";InvalidateRect(window,nullptr,FALSE);}
@@ -710,8 +714,8 @@ int updatePrompt(const UpdateInfo& info,bool test=false){
 }
 int aboutPrompt(bool test=false){
   const auto site=wide(DefaultServer);
-  const std::wstring content=L"版本："+wide(AppVersion)+L"\n官网：<a href=\""+site+L"\">"+site+L"</a>";
-  TASKDIALOG_BUTTON buttons[]={{1001,L"检查更新"}};
+  const std::wstring content=L"版本："+wide(AppVersion)+(UpdateManifestPath[0]?L"":L"（自用构建）")+L"\n官网：<a href=\""+site+L"\">"+site+L"</a>";
+  TASKDIALOG_BUTTON buttons[]={{1001,UpdateManifestPath[0]?L"检查更新":L"下载自用更新"}};
   TASKDIALOGCONFIG config{};config.cbSize=sizeof(config);config.hwndParent=window;
   config.dwFlags=TDF_ALLOW_DIALOG_CANCELLATION|TDF_SIZE_TO_CONTENT|TDF_ENABLE_HYPERLINKS;
   config.pszWindowTitle=L"关于 XgoatCast";config.pszMainInstruction=L"XgoatCast";config.pszContent=content.c_str();
@@ -778,6 +782,7 @@ LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){try{
 void uiSelfTest(const std::wstring&output){
   auto require=[](bool ok,const char*message){if(!ok)throw std::runtime_error(message);};
   renderPreview(output+L".png",false,false);motionAllowed=true;
+  checkForUpdates(false);require(!updateChecking&&!updateThread.joinable(),"Self-use build started the official updater");
   require(aboutPrompt(true)==1001,"About check-update button did not respond");
   {popup=2;auto items=menuItems();require(std::any_of(items.begin(),items.end(),[](const MenuItem&i){return i.id==30006&&i.label==L"关于";}),"Settings menu omitted About");popup=0;}
   {UpdateInfo update{true,"0.0.1-beta.3","https://example.com/setup.exe","https://cast.xgoat.top/downloads.html","测试更新提示","2026-10-04"};
@@ -826,13 +831,14 @@ void uiSelfTest(const std::wstring&output){
     RECT r{};GetClientRect(trayPopup,&r);auto dc=GetDC(trayPopup);auto mem=CreateCompatibleDC(dc);auto bitmap=CreateCompatibleBitmap(dc,r.right,r.bottom);auto previous=SelectObject(mem,bitmap);paintTrayPopup(trayPopup,mem);SelectObject(mem,previous);DeleteDC(mem);ReleaseDC(trayPopup,dc);{Bitmap image(bitmap,nullptr);auto encoder=pngEncoder();image.Save((output+L".tray-menu.png").c_str(),&encoder,nullptr);}DeleteObject(bitmap);
     SendMessageW(trayPopup,WM_KEYDOWN,VK_ESCAPE,0);require(!trayPopup,"Tray menu did not close");}
   auto audioRow=std::find_if(hits.begin(),hits.end(),[](const Hit&h){return h.id==20000;});require(audioRow!=hits.end()&&audioRow->rect.X>=712&&audioRow->rect.GetRight()<=976,"Sound panel is not an independent column");
+  if(supportsProcessAudio()){auto app=pointFor(20000);bool wasOn=settings.included.count(audioNames[0])!=0;wndProc(window,WM_LBUTTONDOWN,0,app);wndProc(window,WM_LBUTTONUP,0,app);require((settings.included.count(audioNames[0])!=0)!=wasOn,"Setup app sound click did not toggle");if(wasOn)settings.included.insert(audioNames[0]);else settings.included.erase(audioNames[0]);}
   state.phase=Phase::Sharing;state.idleSeconds=-1;state.noViewerSeconds=93;state.autoPause=true;state.observedAt=GetTickCount64();liveFrame=syntheticPreview();syncLayout();
   require(uiWidth()==560&&uiHeight()==480,"Compact dimensions incorrect");capturePreview(output+L".compact.png");
   require(std::none_of(hits.begin(),hits.end(),[](const Hit&h){return h.id==7||h.id==45||h.id==22||(h.id>=50&&h.id<20000);}),"Collapsed controller retained video settings controls");
   require(std::any_of(hits.begin(),hits.end(),[](const Hit&h){return h.id==30;}),"Compact microphone missing");
   auto mic=pointFor(30);bool before=settings.microphone;wndProc(window,WM_LBUTTONDOWN,0,mic);wndProc(window,WM_LBUTTONUP,0,mic);require(settings.microphone!=before,"Compact microphone click did not toggle");
-  if(windowsBuild()>=20348){auto app=pointFor(20000);bool wasOn=settings.included.count(audioNames[0])!=0;wndProc(window,WM_LBUTTONDOWN,0,app);wndProc(window,WM_LBUTTONUP,0,app);require((settings.included.count(audioNames[0])!=0)!=wasOn,"Compact app sound click did not toggle");}
-  if(windowsBuild()>=20348){auto app=pointFor(20000);auto names=audioNames;auto included=settings.included;wndProc(window,WM_LBUTTONDOWN,0,app);auto next=names;next.insert(next.begin(),L"new-audio-app");updateAudioNames(next);require(pressedId==-1&&GetCapture()!=window&&hits.empty(),"Audio refresh retained stale press");capturePreview(output+L".audio-refresh.png");wndProc(window,WM_LBUTTONUP,0,app);require(settings.included==included,"Audio refresh toggled the wrong program");updateAudioNames(names);capturePreview(output+L".compact.png");}
+  if(supportsProcessAudio()){auto app=pointFor(20000);bool wasOn=settings.included.count(audioNames[0])!=0;wndProc(window,WM_LBUTTONDOWN,0,app);wndProc(window,WM_LBUTTONUP,0,app);require((settings.included.count(audioNames[0])!=0)!=wasOn,"Compact app sound click did not toggle");}
+  if(supportsProcessAudio()){auto app=pointFor(20000);auto names=audioNames;auto included=settings.included;wndProc(window,WM_LBUTTONDOWN,0,app);auto next=names;next.insert(next.begin(),L"new-audio-app");updateAudioNames(next);require(pressedId==-1&&GetCapture()!=window&&hits.empty(),"Audio refresh retained stale press");capturePreview(output+L".audio-refresh.png");wndProc(window,WM_LBUTTONUP,0,app);require(settings.included==included,"Audio refresh toggled the wrong program");updateAudioNames(names);capturePreview(output+L".compact.png");}
   require(layout::livePreview.Width*layout::livePreview.Height>uiWidth()*(uiHeight()-layout::titleHeight-layout::statusHeight)*.5f,"Preview does not dominate the compact layout");
   {
     auto hasCaption=[&](const wchar_t*caption){return std::any_of(textRuns.begin(),textRuns.end(),[&](const TextRun&r){return r.value==caption;});};
@@ -899,6 +905,8 @@ void uiSelfTest(const std::wstring&output){
   std::ofstream file{std::filesystem::path(output)};file<<Json{{"aboutDialog",true},{"trayHoverRendering",true},{"updatePrompt",true},{"microphoneSelection",true},{"sharedStatusFooter",true},{"accountBudget",true},{"inlineAutoPause",true},{"autoPaused",true},{"stoppedCountdown",true},{"endSession",true},{"framelessWindow",true},{"dpiIcons",true},{"waitingConnection",true},{"connectionPriority",true},{"trayMenuPlacement",true},{"blockedSmallPanel",true},{"customMenus",true},{"selectionPreview",true},{"qualityMenuPolicy",true},{"pointerCancellation",true},{"sourceSelection",true},{"compactHitTargets",true},{"waitingGuard",true},{"reducedMotion",true},{"immediateExpansion",true},{"countdownSemantics",true},{"hoverHints",true},{"independentSoundPanel",true},{"compactControlsHidden",true},{"layoutBounds",true},{"scrollRegions",true},{"titlebarHitTargets",true},{"automaticLayout",true},{"compactAudioInteraction",true},{"audioRefreshCancellation",true},{"previewPresentation",true},{"waitingHasNoTimer",true},{"noManualLayout",true},{"contrast",ratios}}.dump(2);
 }
 void selfTest(const std::wstring& output){
+  if(supportsProcessAudio(19040)||!supportsProcessAudio(19041)||!supportsProcessAudio(19045)||!supportsProcessAudio(20348)||!supportsProcessAudio(22000))throw std::runtime_error("程序声音系统支持判断失败");
+  if(UpdateManifestPath[0]||checkForUpdate().available)throw std::runtime_error("自用构建不应检查作者更新源");
   Json manifest={{"product","XgoatCast"},{"version","0.0.1-beta.2"},{"downloadUrl","https://example.com/setup.exe"},{"releasePageUrl","https://cast.xgoat.top/downloads.html"},{"notes","版本更新"}};
   auto update=parseUpdateManifest(manifest,"0.0.1-beta.1");if(!update.available||update.releasePageUrl!="https://cast.xgoat.top/downloads.html")throw std::runtime_error("更新检测测试失败");
   if(parseUpdateManifest(manifest,"0.0.1-beta.2").available||parseUpdateManifest(manifest,"0.0.1").available)throw std::runtime_error("重复或旧版本触发了更新");
@@ -928,13 +936,13 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int){
     HANDLE mutex=CreateMutexW(nullptr,FALSE,L"Local\\XgoatCast.Native");if(GetLastError()==ERROR_ALREADY_EXISTS&&!smoke&&renderOutput.empty()&&uiReport.empty()&&iconOutput.empty()){HWND other=FindWindowW(ClassName,nullptr);if(other){if(!uri.empty()){COPYDATASTRUCT data{0x58434754,(DWORD)((uri.size()+1)*sizeof(wchar_t)),uri.data()};DWORD_PTR result;SendMessageTimeoutW(other,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data),SMTO_ABORTIFHUNG,3000,&result);}ShowWindow(other,SW_RESTORE);SetForegroundWindow(other);}CloseHandle(mutex);return 0;}
     HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);GdiplusStartupInput startup;ULONG_PTR token;GdiplusStartup(&token,&startup,nullptr);
     if(!iconOutput.empty()){exportIcons(iconOutput);GdiplusShutdown(token);if(SUCCEEDED(com))CoUninitialize();return 0;}
-    settings=readSettings();if(windowsBuild()<20348)settings.audio=false;refreshWindowIcons(GetDpiForSystem());{SHFILEINFOW info{};if(SHGetFileInfoW(L"program.exe",FILE_ATTRIBUTE_NORMAL,&info,sizeof(info),SHGFI_ICON|SHGFI_LARGEICON|SHGFI_USEFILEATTRIBUTES))genericIcon=info.hIcon;}WNDCLASSEXW c{};c.cbSize=sizeof(c);c.hInstance=instance;c.lpszClassName=ClassName;c.lpfnWndProc=wndProc;c.hCursor=LoadCursorW(nullptr,IDC_ARROW);c.hIcon=icon;c.hIconSm=smallIcon;RegisterClassExW(&c);
+    settings=readSettings();if(!supportsProcessAudio())settings.audio=false;refreshWindowIcons(GetDpiForSystem());{SHFILEINFOW info{};if(SHGetFileInfoW(L"program.exe",FILE_ATTRIBUTE_NORMAL,&info,sizeof(info),SHGFI_ICON|SHGFI_LARGEICON|SHGFI_USEFILEATTRIBUTES))genericIcon=info.hIcon;}WNDCLASSEXW c{};c.cbSize=sizeof(c);c.hInstance=instance;c.lpszClassName=ClassName;c.lpfnWndProc=wndProc;c.hCursor=LoadCursorW(nullptr,IDC_ARROW);c.hIcon=icon;c.hIconSm=smallIcon;RegisterClassExW(&c);
     scale=GetDpiForSystem()/96.f;window=CreateWindowExW(WS_EX_APPWINDOW,ClassName,L"XgoatCast · 共享",WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,int(uiWidth()*scale),int(uiHeight()*scale),nullptr,nullptr,instance,nullptr);if(!window)throw std::runtime_error("无法创建共享窗口");
     BOOL dark=FALSE;DwmSetWindowAttribute(window,20,&dark,sizeof(dark));DWMNCRENDERINGPOLICY noFrame=DWMNCRP_DISABLED;DwmSetWindowAttribute(window,DWMWA_NCRENDERING_POLICY,&noFrame,sizeof(noFrame));DWORD corner=3;DwmSetWindowAttribute(window,33,&corner,sizeof(corner));DWORD border=0xfffffffe;DwmSetWindowAttribute(window,34,&border,sizeof(border));MARGINS margins{0,0,0,0};DwmExtendFrameIntoClientArea(window,&margins);
     {BOOL animate=TRUE;SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,&animate,0);motionAllowed=animate!=FALSE;}
     resize();
     if(!renderOutput.empty()||!uiReport.empty()){if(!uiReport.empty())uiSelfTest(uiReport);else renderPreview(renderOutput,renderRegistration,renderAudio,compactMode);DestroyWindow(window);if(genericIcon)DestroyIcon(genericIcon);DestroyIcon(icon);DestroyIcon(smallIcon);GdiplusShutdown(token);if(SUCCEEDED(com))CoUninitialize();CloseHandle(mutex);return 0;}
-    registered=protocolRegistered();if(!registered&&!smoke){registerProtocol(true);localMessage.clear();}SetTimer(window,2,1000,nullptr);SetTimer(window,3,3000,nullptr);SetTimer(window,7,200,nullptr);session=std::make_unique<Session>(window);if(!smoke&&uri.empty()){serverMonitor=std::make_unique<ServerMonitor>(window);serverMonitor->watch(DefaultServer);}tray(true);if(!hidden)show();if(!uri.empty())receive(uri);if(!smoke){SetTimer(window,8,6*60*60*1000,nullptr);checkForUpdates(false);}if(smoke)SetTimer(window,1,3000,nullptr);
+    registered=protocolRegistered();if(!registered&&!smoke){registerProtocol(true);localMessage.clear();}SetTimer(window,2,1000,nullptr);SetTimer(window,3,3000,nullptr);SetTimer(window,7,200,nullptr);session=std::make_unique<Session>(window);if(!smoke&&uri.empty()){serverMonitor=std::make_unique<ServerMonitor>(window);serverMonitor->watch(DefaultServer);}tray(true);if(!hidden)show();if(!uri.empty())receive(uri);if(!smoke&&UpdateManifestPath[0]){SetTimer(window,8,6*60*60*1000,nullptr);checkForUpdates(false);}if(smoke)SetTimer(window,1,3000,nullptr);
     MSG msg;while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}serverMonitor.reset();session.reset();if(appsThread.joinable())appsThread.join();if(updateThread.joinable())updateThread.join();for(auto&[name,h]:appIcons)DestroyIcon(h);if(genericIcon)DestroyIcon(genericIcon);DestroyIcon(icon);DestroyIcon(smallIcon);GdiplusShutdown(token);if(SUCCEEDED(com))CoUninitialize();CloseHandle(mutex);return 0;
   }catch(const std::exception&e){if(!previewReport.empty()){std::ofstream file{std::filesystem::path(previewReport+L".error")};file<<e.what();}else if(!serverReport.empty()){std::ofstream file{std::filesystem::path(serverReport+L".error")};file<<e.what();}else if(!uiReport.empty()){std::ofstream file{std::filesystem::path(uiReport+L".error")};file<<e.what();}else if(!report.empty()){std::ofstream file{std::filesystem::path(report)};file<<e.what();}else if(!audioOutput.empty()){std::ofstream file{std::filesystem::path(audioOutput+L".error")};file<<e.what();}else MessageBoxW(nullptr,wide(e.what()).c_str(),L"XgoatCast",MB_ICONERROR);return 1;}
 }

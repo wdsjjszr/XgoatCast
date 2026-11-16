@@ -60,6 +60,13 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+      - name: Upload portable validation client
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: XgoatCast-portable-x64-${{ github.run_number }}
+          path: desktop/native-client/out/XgoatCast-win-x64/
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload UI check reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
