@@ -397,7 +397,7 @@ void paintSession(Graphics&g){
     button(g,41,RectF(712,730,264,28),L"停止并结束会话",false,hasLaunch&&remainingSeconds()!=0&&!stopping);
   }else{
     label(g,selectedSourceName(),RectF(16,64,300,28),13,text,true);hint(9004,RectF(16,64,300,28),selectedSourceName());
-    button(g,41,RectF(328,62,208,30),L"停止并结束会话",false,!stopping);
+    button(g,41,RectF(328,62,152,30),L"停止并结束会话",false,!stopping);
     drawPreview(g);paintCompactSound(g);
     glyph(g,0xE716,RectF(20,384,20,24),18,muted);
     auto viewers=std::to_wstring(state.viewers);float numberWidth=std::min(100.f,textWidth(viewers,26,true,L"Bahnschrift"));
