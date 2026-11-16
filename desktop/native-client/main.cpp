@@ -389,10 +389,10 @@ void paintSession(Graphics&g){
     RectF action(712,650,264,72);bool enabled=live||starting||canStart;
     Color base=enabled?orange:ui::controlDisabled,ink=enabled?orangeInk:muted;
     fill(g,action,enabled&&pressedId==40&&hoverId==40?Color(255,226,72,0):enabled&&hoverId==40?Color(255,246,88,15):base,8);
-    label(g,live||starting?L"停止共享":expired?L"等待已超时":L"开始共享",RectF(732,660,224,24),14,ink);
-    if(!count.empty()&&!live&&!starting){float size=std::min(40.f,136.f*40.f/std::max(1.f,textWidth(count,40,false,L"Bahnschrift")));label(g,count,RectF(732,689,136,48),size,ink);textRuns.back().numeric=true;}
-    else glyph(g,live||starting?0xE71A:0xE768,RectF(732,694,32,36),26,ink);
-    label(g,std::to_wstring(state.viewers)+L" 人观看",RectF(874,705,82,28),12,ink,false,true);
+    label(g,live||starting?L"停止共享":expired?L"等待已超时":L"开始共享",RectF(732,658,224,22),14,ink);
+    if(!count.empty()&&!live&&!starting){float size=std::min(32.f,136.f*32.f/std::max(1.f,textWidth(count,32,false,L"Bahnschrift")));label(g,count,RectF(732,680,136,36),size,ink);textRuns.back().numeric=true;}
+    else glyph(g,live||starting?0xE71A:0xE768,RectF(732,684,32,32),26,ink);
+    label(g,std::to_wstring(state.viewers)+L" 人观看",RectF(874,692,82,24),12,ink,false,true);
     if(enabled)hits.push_back({action,40});hint(40,action);
     button(g,41,RectF(712,730,264,28),L"停止并结束会话",false,hasLaunch&&remainingSeconds()!=0&&!stopping);
   }else{
@@ -864,6 +864,7 @@ void uiSelfTest(const std::wstring&output){
   state.phase=Phase::Sharing;syncLayout();state.phase=Phase::Failed;syncLayout();require(!expanded&&uiWidth()==480,"Failed session did not return to waiting panel");
   state.phase=Phase::Ready;state.idleSeconds=120;state.observedAt=GetTickCount64();syncLayout();
   capturePreview(output+L".ready.png");require(std::none_of(hits.begin(),hits.end(),[](const Hit&h){return h.id==7;}),"Manual layout action is still present");
+  for(auto&run:textRuns)if(run.numeric)require(run.rect.Y>=650&&run.rect.GetBottom()<=722,"Countdown outside start button");
   wndProc(window,WM_KEYDOWN,VK_ESCAPE,0);require(expanded,"Escape manually collapsed settings");
   auto checkBounds=[&](){for(auto&hit:hits){require(hit.rect.X>=0&&hit.rect.Y>=0&&hit.rect.GetRight()<=uiWidth()&&hit.rect.GetBottom()<=uiHeight(),"Control outside client area");}for(size_t a=0;a<hits.size();++a)for(size_t b=a+1;b<hits.size();++b)require(!hits[a].rect.IntersectsWith(hits[b].rect),"Controls have overlapping hit areas");};
   checkBounds();
